@@ -3,12 +3,6 @@ use chrono::{DateTime, Utc};
 use reqwest::header::AUTHORIZATION;
 use reqwest::{StatusCode, Url};
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum ContentType {
-    Books,
-    Highlights,
-}
-
 pub struct Readwise {
     token: String,
     api_endpoint: Url,
@@ -16,6 +10,7 @@ pub struct Readwise {
 }
 
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 
 #[derive(Serialize, Deserialize)]
 pub struct Book {
@@ -55,6 +50,12 @@ pub struct Tag {
     pub name: String,
 }
 
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+enum Resource {
+    Books,
+    Highlights,
+}
+
 impl Readwise {
     pub fn new(token: String) -> Self {
         Self {
@@ -68,9 +69,29 @@ impl Readwise {
         &self,
         last_updated: Option<DateTime<Utc>>,
     ) -> Result<Vec<Book>, anyhow::Error> {
+        self.fetch_paged(
+            Resource::Books,
+            last_updated,
+        ).await
+    }
+
+    pub async fn fetch_highlights(
+        &self,
+        last_updated: Option<DateTime<Utc>>,
+    ) -> Result<Vec<Highlight>, anyhow::Error> {
+        self.fetch_paged(
+            Resource::Highlights,
+            last_updated,
+        ).await
+    }
+
+    async fn fetch_paged<T: DeserializeOwned>(&self, resource: Resource, last_updated: Option<DateTime<Utc>>) -> Result<Vec<T>, anyhow::Error> {
         let mut url = self.api_endpoint.clone();
         url.path_segments_mut()
-            .unwrap().push("books");
+            .unwrap().push(match resource {
+            Resource::Books => "books",
+            Resource::Highlights => "highlights",
+        });
 
         url.query_pairs_mut()
             .append_pair("page_size", &self.api_page_size.to_string());
@@ -81,10 +102,10 @@ impl Readwise {
         }
 
         let mut books = vec![];
-        let mut next_url = url;
+        let mut next_url = url.clone();
 
         loop {
-            let mut response = reqwest::Client::new()
+            let response = reqwest::Client::new()
                 .get(next_url.clone())
                 .header(AUTHORIZATION, format!("Token {}", self.token))
                 .send()
@@ -104,7 +125,7 @@ impl Readwise {
                 return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
             }
 
-            let mut response = response.json::<CollectionResponse<Book>>()
+            let mut response = response.json::<CollectionResponse<T>>()
                 .await?;
 
             books.append(&mut response.results);
