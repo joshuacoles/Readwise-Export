@@ -1011,7 +1011,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tera",
- "thiserror",
  "tokio",
  "tracing",
 ]

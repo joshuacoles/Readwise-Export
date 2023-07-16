@@ -1,17 +1,14 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
-use obsidian_rust_interface::VaultNote;
 use regex::Regex;
 use rhai::{AST, Dynamic, Engine, Scope};
 use rhai::serde::to_dynamic;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tera::{Context, Template, Tera};
+use serde::{Serialize};
+use serde_json::{json};
+use tera::{Context, Tera};
 use crate::readwise::{Book, Highlight};
-use crate::readwise::Resource::Highlights;
 
 mod readwise;
 
@@ -30,6 +27,14 @@ struct Cli {
     #[arg(long)]
     api_token: String,
 
+    /// Read data from a JSON cache instead of the Readwise API
+    #[arg(long)]
+    from_cache: Option<PathBuf>,
+
+    /// Write data to a JSON cache for later use
+    #[arg(long)]
+    write_cache: Option<PathBuf>,
+
     /// If custom metadata should be written, a script to generate it
     #[arg(long)]
     metadata_script: Option<PathBuf>,
@@ -37,12 +42,6 @@ struct Cli {
     /// A template or directory of templates to use for exporting
     #[arg(long)]
     template: PathBuf,
-}
-
-#[derive(thiserror::Error, Debug)]
-enum Error {
-    #[error("Request error {0}")]
-    RequestError(#[from] reqwest::Error),
 }
 
 pub struct Library {
@@ -70,14 +69,17 @@ enum ScriptType {
 }
 
 impl ScriptType {
-    fn execute(&self, book: &Book, highlights: &[&Highlight]) -> serde_yaml::Value {
+    fn execute(&self, book: &Book, highlights: &[&Highlight]) -> anyhow::Result<serde_yaml::Value> {
         match self {
             ScriptType::Rhai { metadata_script, engine } => {
                 let mut scope = {
                     let mut scope = Scope::new();
 
-                    scope.push_dynamic("book", to_dynamic(book).unwrap());
-                    scope.push_dynamic("highlights", to_dynamic(highlights).unwrap());
+                    let book: Dynamic = to_dynamic(book)?;
+                    let highlights = to_dynamic(highlights)?;
+
+                    scope.push_dynamic("book", book);
+                    scope.push_dynamic("highlights", highlights);
 
                     scope
                 };
@@ -85,9 +87,9 @@ impl ScriptType {
                 let dynamic: Dynamic = engine.eval_ast_with_scope::<Dynamic>(
                     &mut scope,
                     metadata_script,
-                ).unwrap();
+                )?;
 
-                serde_yaml::to_value(&dynamic).unwrap()
+                Ok(serde_yaml::to_value(&dynamic)?)
             }
 
             ScriptType::Javascript { script } => {
@@ -95,9 +97,9 @@ impl ScriptType {
                     .call("metadata", &json!({
                         "book": book,
                         "highlights": highlights,
-                    })).unwrap();
+                    }))?;
 
-                serde_yaml::to_value(&a).unwrap()
+                Ok(serde_yaml::to_value(&a)?)
             }
         }
     }
@@ -130,33 +132,33 @@ impl Exporter {
     fn new(
         library: Library,
         cli: &Cli,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let metadata_script = match &cli.metadata_script {
             None => None,
             Some(path) if path.extension().unwrap() == "js" => {
-                let script = js_sandbox::Script::from_file(path).unwrap();
+                let script = js_sandbox::Script::from_file(path)?;
                 Some(ScriptType::Javascript { script: RefCell::new(script) })
             }
 
             Some(path) => {
                 let engine = Engine::new();
-                let metadata_script = engine.compile_file(path.to_path_buf()).unwrap();
+                let metadata_script = engine.compile_file(path.to_path_buf())?;
                 Some(ScriptType::Rhai { metadata_script, engine })
             }
         };
 
-        Exporter {
+        Ok(Exporter {
             library,
             export_root: cli.vault.join(&cli.base_folder),
             templates: {
                 let mut tera = Tera::default();
-                tera.add_template_file(&cli.template, Some("book")).unwrap();
+                tera.add_template_file(&cli.template, Some("book"))?;
                 tera
             },
             metadata_script,
 
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
-        }
+        })
     }
 
     fn export(&self) -> anyhow::Result<()> {
@@ -170,37 +172,38 @@ impl Exporter {
             let category_root = self.export_root.join(category);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
-                self.export_book(&category_root, book).write();
+                self.export_book(&category_root, book)?
+                    .write()?;
             }
         }
 
         Ok(())
     }
 
-    fn export_book(&self, root: &PathBuf, book: &Book) -> NoteToWrite<serde_yaml::Value> {
+    fn export_book(&self, root: &PathBuf, book: &Book) -> anyhow::Result<NoteToWrite<serde_yaml::Value>> {
         let title = self.sanitize_title(&book.title);
         let highlights = self.library.highlights_for(book);
 
         let context = {
-            let mut context = Context::from_value(serde_json::to_value(book).unwrap()).unwrap();
+            let mut context = Context::from_value(serde_json::to_value(book)?)?;
             context.insert("book", &book);
             context.insert("highlights", &highlights);
             context
         };
 
         let contents = self.templates
-            .render("book", &context)
-            .unwrap();
+            .render("book", &context)?;
 
-        let metadata: serde_yaml::Value = self.metadata_script.as_ref()
-            .map(|script| script.execute(book, &highlights))
-            .unwrap_or_else(|| serde_yaml::to_value(&book).unwrap());
+        let metadata: serde_yaml::Value = match &self.metadata_script {
+            None => serde_yaml::to_value(&book)?,
+            Some(script) => script.execute(book, &highlights)?,
+        };
 
-        NoteToWrite {
+        Ok(NoteToWrite {
             path: root.join(title).with_extension("md"),
             contents,
             metadata,
-        }
+        })
     }
 
     fn sanitize_title(&self, title: &str) -> String {
@@ -212,14 +215,18 @@ impl Exporter {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
-    // let readwise = readwise::Readwise::new(&cli.api_token);
-    // let library = readwise.fetch_library().await?;
-    let library = Library {
-        books: serde_json::from_reader(std::fs::File::open("books.json")?)?,
-        highlights: serde_json::from_reader(std::fs::File::open("highlights.json")?)?,
+    let library: Library = if let Some(cache) = cli.from_cache {
+        serde_json::from_reader(std::fs::File::open(cache)?)?
+    } else {
+        let readwise = readwise::Readwise::new(&cli.api_token);
+        readwise.fetch_library().await?
     };
 
-    let exporter = Exporter::new(library, &cli);
+    if let Some(cache) = cli.write_cache {
+        serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+    }
+
+    let exporter = Exporter::new(library, &cli)?;
     exporter.export()?;
 
     Ok(())
