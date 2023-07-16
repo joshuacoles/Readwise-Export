@@ -1,6 +1,4 @@
-use std::arch::aarch64::vqrshlb_s8;
 use std::path::PathBuf;
-use std::thread::scope;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
@@ -30,6 +28,14 @@ struct Cli {
     /// Readwise API token
     #[arg(long)]
     api_token: String,
+
+    /// If custom metadata should be written, a script to generate it
+    #[arg(long)]
+    metadata_script: Option<PathBuf>,
+
+    /// A template or directory of templates to use for exporting
+    #[arg(long)]
+    template: PathBuf,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -57,7 +63,7 @@ struct Exporter {
     library: Library,
 
     templates: Tera,
-    metadata_script: AST,
+    metadata_script: Option<AST>,
     engine: Engine,
 }
 
@@ -67,7 +73,39 @@ struct NoteToWrite<T> {
     contents: String,
 }
 
+impl<T: Serialize> NoteToWrite<T> {
+    fn write(&self) -> anyhow::Result<()> {
+        let contents = format!("---\n{}---\n{}", serde_yaml::to_string(&self.metadata)?, self.contents);
+        std::fs::write(&self.path, contents)?;
+        Ok(())
+    }
+}
+
 impl Exporter {
+    fn new(
+        library: Library,
+        cli: &Cli,
+    ) -> Self {
+        let engine = rhai::Engine::new();
+        let metadata_script = cli.metadata_script
+            .as_ref()
+            .map(|script| engine.compile_file(script.to_path_buf()).unwrap());
+
+        Exporter {
+            library,
+            export_root: cli.vault.join(&cli.base_folder),
+            templates: {
+                let mut tera = Tera::default();
+                tera.add_template_file( &cli.template, Some("book")).unwrap();
+                tera
+            },
+            metadata_script,
+            engine: Engine::new(),
+
+            sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
+        }
+    }
+
     fn export(&self) -> anyhow::Result<()> {
         let by_category = self.library.books
             .iter()
@@ -79,7 +117,7 @@ impl Exporter {
             let category_root = self.export_root.join(category);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
-                self.export_book(&category_root, book);
+                self.export_book(&category_root, book).write();
             }
         }
 
@@ -98,24 +136,30 @@ impl Exporter {
         };
 
         let contents = self.templates
-            .render("header", &context)
+            .render("book", &context)
             .unwrap();
 
-        let mut scope = {
-            let mut scope = Scope::new();
+        let metadata: serde_yaml::Value = {
+            let mut scope = {
+                let mut scope = Scope::new();
 
-            scope.push_dynamic("book", to_dynamic(book).unwrap());
-            scope.push_dynamic("highlights", to_dynamic(highlights).unwrap());
+                scope.push_dynamic("book", to_dynamic(book).unwrap());
+                scope.push_dynamic("highlights", to_dynamic(highlights).unwrap());
 
-            scope
+                scope
+            };
+
+            if let Some(script) = &self.metadata_script {
+                let dynamic: Dynamic = self.engine.eval_ast_with_scope::<Dynamic>(
+                    &mut scope,
+                    script,
+                ).unwrap();
+
+                serde_yaml::to_value(&dynamic).unwrap()
+            } else {
+                serde_yaml::to_value(&book).unwrap()
+            }
         };
-
-        let metadata: Dynamic = self.engine.eval_ast_with_scope::<Dynamic>(
-            &mut scope,
-            &self.metadata_script,
-        ).unwrap();
-
-        let metadata = serde_yaml::to_value(&metadata).unwrap();
 
         NoteToWrite {
             path: root.join(title).with_extension("md"),
@@ -133,9 +177,15 @@ impl Exporter {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
-    let readwise = readwise::Readwise::new(cli.api_token);
-    let library = readwise.fetch_library().await?;
-    let export_root = cli.vault.join(cli.base_folder);
+    // let readwise = readwise::Readwise::new(&cli.api_token);
+    // let library = readwise.fetch_library().await?;
+    let library = Library {
+        books: serde_json::from_reader(std::fs::File::open("books.json")?)?,
+        highlights: serde_json::from_reader(std::fs::File::open("highlights.json")?)?,
+    };
+
+    let exporter = Exporter::new(library, &cli);
+    exporter.export()?;
 
     Ok(())
 }

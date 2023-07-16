@@ -17,7 +17,7 @@ use crate::Library;
 pub struct Book {
     pub id: i32,
     pub title: String,
-    pub author: String,
+    pub author: Option<String>,
     pub category: String,
     pub num_highlights: i32,
     pub last_highlight_at: Option<String>,
@@ -57,9 +57,9 @@ pub enum Resource {
 }
 
 impl Readwise {
-    pub fn new(token: String) -> Self {
+    pub fn new(token: &str) -> Self {
         Self {
-            token,
+            token: token.to_string(),
             api_endpoint: "https://readwise.io/api/v2".parse().unwrap(),
             api_page_size: 1000,
         }
