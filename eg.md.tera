@@ -1,0 +1,14 @@
+## {{ title }}
+
+{% for highlight in highlights %}
+> [!quote]
+> {{ highlight.text | trim | indent(prefix='> ') }}
+{%- if highlight.note %}
+> ---
+> {{ highlight.note | trim | indent(prefix='> ') | replace(from="
+
+", to="
+>
+") }}{%- endif %}
+^{{ highlight.id }}
+{% endfor %}
