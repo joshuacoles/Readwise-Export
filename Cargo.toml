@@ -9,10 +9,16 @@ edition = "2021"
 anyhow = "1.0.71"
 chrono = "0.4.26"
 clap = { version = "4.3.11", features = ["derive"] }
+itertools = "0.11.0"
+#js-sandbox = "0.1.6"
 obsidian-rust-interface = { git = "https://github.com/joshuacoles/Obsidian-Rust-Interface", version = "0.1.1" }
+regex = "1.9.1"
 reqwest = { version = "0.11.18", features = ["json"] }
+rhai = { version = "1.15.1", features = ["serde", "serde_json"] }
 serde = { version = "1.0.171", features = ["derive"] }
 serde_json = "1.0.102"
+serde_yaml = "0.9.23"
+tera = "1.19.0"
 thiserror = "1.0.43"
 tokio = { version = "1.29.1", features = ["full"] }
 tracing = "0.1.37"

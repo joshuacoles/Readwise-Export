@@ -11,32 +11,32 @@ pub struct Readwise {
 
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use crate::Library;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Book {
     pub id: i32,
     pub title: String,
     pub author: String,
     pub category: String,
     pub num_highlights: i32,
-    pub last_highlight_at: String,
-    pub updated: String,
-    pub cover_image_url: String,
-    pub highlights_url: String,
+    pub last_highlight_at: Option<String>,
+    pub updated: Option<String>,
+    pub cover_image_url: Option<String>,
+    pub highlights_url: Option<String>,
     pub source_url: Option<String>,
-    pub asin: String,
-    pub highlights: Vec<Highlight>,
+    pub asin: Option<String>,
     pub tags: Vec<Tag>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Highlight {
     pub id: i32,
     pub text: String,
     pub note: String,
     pub location: i32,
     pub location_type: String,
-    pub highlighted_at: String,
+    pub highlighted_at: Option<String>,
     pub url: Option<String>,
     pub color: String,
     pub updated: String,
@@ -44,14 +44,14 @@ pub struct Highlight {
     pub tags: Vec<Tag>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tag {
     pub id: i32,
     pub name: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum Resource {
+pub enum Resource {
     Books,
     Highlights,
 }
@@ -63,6 +63,15 @@ impl Readwise {
             api_endpoint: "https://readwise.io/api/v2".parse().unwrap(),
             api_page_size: 1000,
         }
+    }
+
+    pub async fn fetch_library(
+        &self,
+    ) -> anyhow::Result<Library> {
+        Ok(Library {
+            books: self.fetch_books(None).await?,
+            highlights: self.fetch_highlights(None).await?,
+        })
     }
 
     pub async fn fetch_books(
@@ -85,7 +94,7 @@ impl Readwise {
         ).await
     }
 
-    async fn fetch_paged<T: DeserializeOwned>(&self, resource: Resource, last_updated: Option<DateTime<Utc>>) -> Result<Vec<T>, anyhow::Error> {
+    pub(crate) async fn fetch_paged<T: DeserializeOwned>(&self, resource: Resource, last_updated: Option<DateTime<Utc>>) -> Result<Vec<T>, anyhow::Error> {
         let mut url = self.api_endpoint.clone();
         url.path_segments_mut()
             .unwrap().push(match resource {
@@ -101,12 +110,12 @@ impl Readwise {
                 .append_pair("updated__gt", &last_updated.to_rfc3339());
         }
 
-        let mut books = vec![];
+        let mut entities = vec![];
         let mut next_url = url.clone();
 
         loop {
             let response = reqwest::Client::new()
-                .get(next_url.clone())
+                .get(dbg!(next_url.clone()))
                 .header(AUTHORIZATION, format!("Token {}", self.token))
                 .send()
                 .await?;
@@ -128,7 +137,7 @@ impl Readwise {
             let mut response = response.json::<CollectionResponse<T>>()
                 .await?;
 
-            books.append(&mut response.results);
+            entities.append(&mut response.results);
 
             if let Some(next) = response.next {
                 next_url = Url::parse(&next).unwrap();
@@ -137,7 +146,7 @@ impl Readwise {
             }
         }
 
-        return Ok(books);
+        return Ok(entities);
     }
 }
 
