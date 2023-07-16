@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use clap::Parser;
@@ -7,7 +8,7 @@ use regex::Regex;
 use rhai::{AST, Dynamic, Engine, Scope};
 use rhai::serde::to_dynamic;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tera::{Context, Template, Tera};
 use crate::readwise::{Book, Highlight};
 use crate::readwise::Resource::Highlights;
@@ -57,14 +58,58 @@ impl Library {
     }
 }
 
+enum ScriptType {
+    Rhai {
+        metadata_script: AST,
+        engine: Engine,
+    },
+
+    Javascript {
+        script: RefCell<js_sandbox::Script>
+    },
+}
+
+impl ScriptType {
+    fn execute(&self, book: &Book, highlights: &[&Highlight]) -> serde_yaml::Value {
+        match self {
+            ScriptType::Rhai { metadata_script, engine } => {
+                let mut scope = {
+                    let mut scope = Scope::new();
+
+                    scope.push_dynamic("book", to_dynamic(book).unwrap());
+                    scope.push_dynamic("highlights", to_dynamic(highlights).unwrap());
+
+                    scope
+                };
+
+                let dynamic: Dynamic = engine.eval_ast_with_scope::<Dynamic>(
+                    &mut scope,
+                    metadata_script,
+                ).unwrap();
+
+                serde_yaml::to_value(&dynamic).unwrap()
+            }
+
+            ScriptType::Javascript { script } => {
+                let a: serde_json::Value = script.borrow_mut()
+                    .call("metadata", &json!({
+                        "book": book,
+                        "highlights": highlights,
+                    })).unwrap();
+
+                serde_yaml::to_value(&a).unwrap()
+            }
+        }
+    }
+}
+
 struct Exporter {
     sanitizer: Regex,
     export_root: PathBuf,
     library: Library,
 
     templates: Tera,
-    metadata_script: Option<AST>,
-    engine: Engine,
+    metadata_script: Option<ScriptType>,
 }
 
 struct NoteToWrite<T> {
@@ -86,21 +131,29 @@ impl Exporter {
         library: Library,
         cli: &Cli,
     ) -> Self {
-        let engine = rhai::Engine::new();
-        let metadata_script = cli.metadata_script
-            .as_ref()
-            .map(|script| engine.compile_file(script.to_path_buf()).unwrap());
+        let metadata_script = match &cli.metadata_script {
+            None => None,
+            Some(path) if path.extension().unwrap() == "js" => {
+                let script = js_sandbox::Script::from_file(path).unwrap();
+                Some(ScriptType::Javascript { script: RefCell::new(script) })
+            }
+
+            Some(path) => {
+                let engine = Engine::new();
+                let metadata_script = engine.compile_file(path.to_path_buf()).unwrap();
+                Some(ScriptType::Rhai { metadata_script, engine })
+            }
+        };
 
         Exporter {
             library,
             export_root: cli.vault.join(&cli.base_folder),
             templates: {
                 let mut tera = Tera::default();
-                tera.add_template_file( &cli.template, Some("book")).unwrap();
+                tera.add_template_file(&cli.template, Some("book")).unwrap();
                 tera
             },
             metadata_script,
-            engine: Engine::new(),
 
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
         }
@@ -139,27 +192,9 @@ impl Exporter {
             .render("book", &context)
             .unwrap();
 
-        let metadata: serde_yaml::Value = {
-            let mut scope = {
-                let mut scope = Scope::new();
-
-                scope.push_dynamic("book", to_dynamic(book).unwrap());
-                scope.push_dynamic("highlights", to_dynamic(highlights).unwrap());
-
-                scope
-            };
-
-            if let Some(script) = &self.metadata_script {
-                let dynamic: Dynamic = self.engine.eval_ast_with_scope::<Dynamic>(
-                    &mut scope,
-                    script,
-                ).unwrap();
-
-                serde_yaml::to_value(&dynamic).unwrap()
-            } else {
-                serde_yaml::to_value(&book).unwrap()
-            }
-        };
+        let metadata: serde_yaml::Value = self.metadata_script.as_ref()
+            .map(|script| script.execute(book, &highlights))
+            .unwrap_or_else(|| serde_yaml::to_value(&book).unwrap());
 
         NoteToWrite {
             path: root.join(title).with_extension("md"),

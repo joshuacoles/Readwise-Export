@@ -10,7 +10,7 @@ anyhow = "1.0.71"
 chrono = "0.4.26"
 clap = { version = "4.3.11", features = ["derive"] }
 itertools = "0.11.0"
-#js-sandbox = "0.1.6"
+js-sandbox = "0.1.6"
 obsidian-rust-interface = { git = "https://github.com/joshuacoles/Obsidian-Rust-Interface", version = "0.1.1" }
 regex = "1.9.1"
 reqwest = { version = "0.11.18", features = ["json"] }
