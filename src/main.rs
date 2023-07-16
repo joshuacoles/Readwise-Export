@@ -5,9 +5,10 @@ use itertools::Itertools;
 use regex::Regex;
 use rhai::{AST, Dynamic, Engine, Scope};
 use rhai::serde::to_dynamic;
-use serde::{Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{json};
 use tera::{Context, Tera};
+use tracing::{debug, info};
 use crate::readwise::{Book, Highlight};
 
 mod readwise;
@@ -44,6 +45,7 @@ struct Cli {
     template: PathBuf,
 }
 
+#[derive(Deserialize, Serialize)]
 pub struct Library {
     books: Vec<Book>,
     highlights: Vec<Highlight>,
@@ -122,6 +124,7 @@ struct NoteToWrite<T> {
 
 impl<T: Serialize> NoteToWrite<T> {
     fn write(&self) -> anyhow::Result<()> {
+        debug!("Writing note to {:?}", self.path);
         let contents = format!("---\n{}---\n{}", serde_yaml::to_string(&self.metadata)?, self.contents);
         std::fs::write(&self.path, contents)?;
         Ok(())
@@ -136,11 +139,13 @@ impl Exporter {
         let metadata_script = match &cli.metadata_script {
             None => None,
             Some(path) if path.extension().unwrap() == "js" => {
+                debug!("Loading javascript metadata script from {:?}", path);
                 let script = js_sandbox::Script::from_file(path)?;
                 Some(ScriptType::Javascript { script: RefCell::new(script) })
             }
 
             Some(path) => {
+                debug!("Loading rhai metadata script from {:?}", path);
                 let engine = Engine::new();
                 let metadata_script = engine.compile_file(path.to_path_buf())?;
                 Some(ScriptType::Rhai { metadata_script, engine })
@@ -153,6 +158,8 @@ impl Exporter {
             templates: {
                 let mut tera = Tera::default();
                 tera.add_template_file(&cli.template, Some("book"))?;
+                debug!("Loaded tera templates for markdown. Templates: {}", tera.get_template_names().join(", "));
+
                 tera
             },
             metadata_script,
@@ -169,6 +176,7 @@ impl Exporter {
         let bc = by_category.into_iter();
 
         for (category, books) in bc {
+            debug!("Starting export of category: {}", category);
             let category_root = self.export_root.join(category);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
@@ -181,8 +189,11 @@ impl Exporter {
     }
 
     fn export_book(&self, root: &PathBuf, book: &Book) -> anyhow::Result<NoteToWrite<serde_yaml::Value>> {
+        debug!("Starting export of book '{}' into '{:?}'", book.title, &root);
+
         let title = self.sanitize_title(&book.title);
         let highlights = self.library.highlights_for(book);
+        debug!("Found {} highlights in library", highlights.len());
 
         let context = {
             let mut context = Context::from_value(serde_json::to_value(book)?)?;
@@ -199,6 +210,8 @@ impl Exporter {
             Some(script) => script.execute(book, &highlights)?,
         };
 
+        debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
+
         Ok(NoteToWrite {
             path: root.join(title).with_extension("md"),
             contents,
@@ -214,15 +227,25 @@ impl Exporter {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    // Install global collector configured based on RUST_LOG env var.
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
-    let library: Library = if let Some(cache) = cli.from_cache {
+    let library: Library = if let Some(cache) = &cli.from_cache {
+        info!("Loading library from cache: {:?}", cache);
         serde_json::from_reader(std::fs::File::open(cache)?)?
     } else {
+        info!("Fetching library from readwise");
+
         let readwise = readwise::Readwise::new(&cli.api_token);
         readwise.fetch_library().await?
     };
 
-    if let Some(cache) = cli.write_cache {
+    info!("Collected library of {} books and {} highlights", library.books.len(), library.highlights.len());
+
+    if let Some(cache) = &cli.write_cache {
+        info!("Writing library to cache");
+
         serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
     }
 

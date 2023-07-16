@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::time::Duration;
 use chrono::{DateTime, Utc};
 use reqwest::header::AUTHORIZATION;
@@ -11,9 +12,10 @@ pub struct Readwise {
 
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use tracing::{debug, info};
 use crate::Library;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Book {
     pub id: i32,
     pub title: String,
@@ -56,6 +58,17 @@ pub enum Resource {
     Highlights,
 }
 
+impl Display for Resource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Resource::Books => "books",
+            Resource::Highlights => "highlights",
+        };
+
+        write!(f, "{}", str)
+    }
+}
+
 impl Readwise {
     pub fn new(token: &str) -> Self {
         Self {
@@ -95,6 +108,12 @@ impl Readwise {
     }
 
     pub(crate) async fn fetch_paged<T: DeserializeOwned>(&self, resource: Resource, last_updated: Option<DateTime<Utc>>) -> Result<Vec<T>, anyhow::Error> {
+        info!(
+            "Fetching {} from Readwise, since {}",
+            resource,
+            last_updated.map(|v| v.to_rfc3339()).unwrap_or("[all]".to_string())
+        );
+
         let mut url = self.api_endpoint.clone();
         url.path_segments_mut()
             .unwrap().push(match resource {
@@ -109,6 +128,8 @@ impl Readwise {
             url.query_pairs_mut()
                 .append_pair("updated__gt", &last_updated.to_rfc3339());
         }
+
+        debug!("Readwise api url: {}", url);
 
         let mut entities = vec![];
         let mut next_url = url.clone();
@@ -127,7 +148,8 @@ impl Readwise {
                     .map(|v| v.parse::<u64>().unwrap())
                     .unwrap_or(5);
 
-                tracing::warn!("Rate limited, retrying in {} seconds", retry_delay);
+                debug!("Rate limited, retrying in {} seconds", retry_delay);
+
                 tokio::time::sleep(Duration::from_secs(retry_delay)).await;
                 continue;
             } else if !response.status().is_success() {
@@ -136,6 +158,13 @@ impl Readwise {
 
             let mut response = response.json::<CollectionResponse<T>>()
                 .await?;
+
+            debug!(
+                "Received api response: count={count}, next={next:?}, previous={previous:?}",
+                count=response.count,
+                next=response.next,
+                previous=response.previous,
+            );
 
             entities.append(&mut response.results);
 
