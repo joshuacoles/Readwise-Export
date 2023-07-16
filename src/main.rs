@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
 use regex::Regex;
@@ -28,13 +29,13 @@ struct Cli {
     #[arg(long)]
     api_token: String,
 
-    /// Read data from a JSON cache instead of the Readwise API
+    /// Store library data in a JSON file for caching between executions
     #[arg(long)]
-    from_cache: Option<PathBuf>,
+    library: Option<PathBuf>,
 
-    /// Write data to a JSON cache for later use
-    #[arg(long)]
-    write_cache: Option<PathBuf>,
+    /// If true, will fetch data from the Readwise API, updating the cache
+    #[arg(long, short, default_value = "false")]
+    refetch: bool,
 
     /// If custom metadata should be written, a script to generate it
     #[arg(long)]
@@ -45,10 +46,11 @@ struct Cli {
     template: PathBuf,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Library {
     books: Vec<Book>,
     highlights: Vec<Highlight>,
+    updated_at: DateTime<Utc>,
 }
 
 impl Library {
@@ -231,23 +233,25 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let library: Library = if let Some(cache) = &cli.from_cache {
-        info!("Loading library from cache: {:?}", cache);
-        serde_json::from_reader(std::fs::File::open(cache)?)?
-    } else {
-        info!("Fetching library from readwise");
+    let readwise = readwise::Readwise::new(&cli.api_token);
 
-        let readwise = readwise::Readwise::new(&cli.api_token);
+    let library = if let Some(cache) = &cli.library {
+        info!("Loading library from cache: {:?}", cache);
+        let mut library: Library = serde_json::from_reader(std::fs::File::open(cache)?)?;
+
+        if cli.refetch {
+            info!("Fetching updates since {:?}", library.updated_at);
+            readwise.update_library(&mut library).await?;
+            serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+        }
+
+        library
+    } else {
+        info!("Fetching whole library from readwise. No persistence configured.");
         readwise.fetch_library().await?
     };
 
     info!("Collected library of {} books and {} highlights", library.books.len(), library.highlights.len());
-
-    if let Some(cache) = &cli.write_cache {
-        info!("Writing library to cache");
-
-        serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
-    }
 
     let exporter = Exporter::new(library, &cli)?;
     exporter.export()?;

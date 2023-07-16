@@ -84,7 +84,21 @@ impl Readwise {
         Ok(Library {
             books: self.fetch_books(None).await?,
             highlights: self.fetch_highlights(None).await?,
+            updated_at: Utc::now(),
         })
+    }
+
+    pub async fn update_library(
+        &self,
+        library: &mut Library,
+    ) -> anyhow::Result<()> {
+        let last_updated = library.updated_at;
+
+        library.books.extend(self.fetch_books(Some(last_updated)).await?);
+        library.highlights.extend(self.fetch_highlights(Some(last_updated)).await?);
+        library.updated_at = Utc::now();
+
+        Ok(())
     }
 
     pub async fn fetch_books(
