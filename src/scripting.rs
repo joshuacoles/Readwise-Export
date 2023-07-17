@@ -1,10 +1,10 @@
-use rhai::{AST, Dynamic, Engine, Scope};
+use crate::readwise::{Book, Highlight};
 use rhai::serde::to_dynamic;
+use rhai::{Dynamic, Engine, Scope, AST};
 use serde_json::json;
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::debug;
-use crate::readwise::{Book, Highlight};
 
 pub enum ScriptType {
     Rhai {
@@ -13,27 +13,44 @@ pub enum ScriptType {
     },
 
     Javascript {
-        script: RefCell<js_sandbox::Script>
+        script: RefCell<js_sandbox::Script>,
     },
 }
 
 impl ScriptType {
     pub fn new(path: &Path) -> anyhow::Result<Self> {
-        if path.extension().filter(|e| e == "js").is_some() {
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .filter(|e| *e == "js")
+            .is_some()
+        {
             debug!("Loading javascript metadata script from {:?}", path);
             let script = js_sandbox::Script::from_file(path)?;
-            Ok(ScriptType::Javascript { script: RefCell::new(script) })
+            Ok(ScriptType::Javascript {
+                script: RefCell::new(script),
+            })
         } else {
             debug!("Loading rhai metadata script from {:?}", path);
             let engine = Engine::new();
             let metadata_script = engine.compile_file(path.to_path_buf())?;
-            Ok(ScriptType::Rhai { metadata_script, engine })
+            Ok(ScriptType::Rhai {
+                metadata_script,
+                engine,
+            })
         }
     }
 
-    pub fn execute(&self, book: &Book, highlights: &[&Highlight]) -> anyhow::Result<serde_yaml::Value> {
+    pub fn execute(
+        &self,
+        book: &Book,
+        highlights: &[&Highlight],
+    ) -> anyhow::Result<serde_yaml::Value> {
         match self {
-            ScriptType::Rhai { metadata_script, engine } => {
+            ScriptType::Rhai {
+                metadata_script,
+                engine,
+            } => {
                 let mut scope = {
                     let mut scope = Scope::new();
 
@@ -46,20 +63,20 @@ impl ScriptType {
                     scope
                 };
 
-                let dynamic: Dynamic = engine.eval_ast_with_scope::<Dynamic>(
-                    &mut scope,
-                    metadata_script,
-                )?;
+                let dynamic: Dynamic =
+                    engine.eval_ast_with_scope::<Dynamic>(&mut scope, metadata_script)?;
 
                 Ok(serde_yaml::to_value(&dynamic)?)
             }
 
             ScriptType::Javascript { script } => {
-                let a: serde_json::Value = script.borrow_mut()
-                    .call("metadata", &json!({
+                let a: serde_json::Value = script.borrow_mut().call(
+                    "metadata",
+                    &json!({
                         "book": book,
                         "highlights": highlights,
-                    }))?;
+                    }),
+                )?;
 
                 Ok(serde_yaml::to_value(&a)?)
             }

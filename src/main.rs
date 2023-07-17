@@ -1,14 +1,16 @@
-use std::path::PathBuf;
+use crate::readwise::{Book, Highlight};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
+use obsidian::NoteToWrite;
 use regex::Regex;
+use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tera::{Context, Tera};
 use tracing::{debug, info};
-use scripting::ScriptType;
-use crate::readwise::{Book, Highlight};
 
+mod obsidian;
 mod readwise;
 mod scripting;
 
@@ -53,7 +55,8 @@ pub struct Library {
 
 impl Library {
     fn highlights_for(&self, book: &Book) -> Vec<&Highlight> {
-        self.highlights.iter()
+        self.highlights
+            .iter()
             .filter(|h| h.book_id == book.id)
             .collect_vec()
     }
@@ -68,29 +71,11 @@ struct Exporter {
     metadata_script: Option<ScriptType>,
 }
 
-struct NoteToWrite<T> {
-    path: PathBuf,
-    metadata: T,
-    contents: String,
-}
-
-impl<T: Serialize> NoteToWrite<T> {
-    fn write(&self) -> anyhow::Result<()> {
-        debug!("Writing note to {:?}", self.path);
-        let contents = format!("---\n{}---\n{}", serde_yaml::to_string(&self.metadata)?, self.contents);
-        std::fs::write(&self.path, contents)?;
-        Ok(())
-    }
-}
-
 impl Exporter {
-    fn new(
-        library: Library,
-        cli: &Cli,
-    ) -> anyhow::Result<Self> {
+    fn new(library: Library, cli: &Cli) -> anyhow::Result<Self> {
         let metadata_script = match &cli.metadata_script {
             None => None,
-            Some(path) => ScriptType::new(path)?,
+            Some(path) => Some(ScriptType::new(path)?),
         };
 
         Ok(Exporter {
@@ -99,7 +84,10 @@ impl Exporter {
             templates: {
                 let mut tera = Tera::default();
                 tera.add_template_file(&cli.template, Some("book"))?;
-                debug!("Loaded tera templates for markdown. Templates: {}", tera.get_template_names().join(", "));
+                debug!(
+                    "Loaded tera templates for markdown. Templates: {}",
+                    tera.get_template_names().join(", ")
+                );
 
                 tera
             },
@@ -110,7 +98,9 @@ impl Exporter {
     }
 
     fn export(&self) -> anyhow::Result<()> {
-        let by_category = self.library.books
+        let by_category = self
+            .library
+            .books
             .iter()
             .group_by(|book| book.category.clone());
 
@@ -121,16 +111,22 @@ impl Exporter {
             let category_root = self.export_root.join(category);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
-                self.export_book(&category_root, book)?
-                    .write()?;
+                self.export_book(&category_root, book)?.write()?;
             }
         }
 
         Ok(())
     }
 
-    fn export_book(&self, root: &PathBuf, book: &Book) -> anyhow::Result<NoteToWrite<serde_yaml::Value>> {
-        debug!("Starting export of book '{}' into '{:?}'", book.title, &root);
+    fn export_book(
+        &self,
+        root: &PathBuf,
+        book: &Book,
+    ) -> anyhow::Result<NoteToWrite<serde_yaml::Value>> {
+        debug!(
+            "Starting export of book '{}' into '{:?}'",
+            book.title, &root
+        );
 
         let title = self.sanitize_title(&book.title);
         let highlights = self.library.highlights_for(book);
@@ -143,8 +139,7 @@ impl Exporter {
             context
         };
 
-        let contents = self.templates
-            .render("book", &context)?;
+        let contents = self.templates.render("book", &context)?;
 
         let mut metadata: serde_yaml::Value = match &self.metadata_script {
             None => serde_yaml::to_value(&book)?,
@@ -152,9 +147,10 @@ impl Exporter {
         };
 
         // We hardcode the type to 'readwise' so that we can find these documents later.
-        metadata.as_mapping_mut()
-            .unwrap()
-            .insert(serde_yaml::Value::from("type"), serde_yaml::Value::from("readwise"));
+        metadata.as_mapping_mut().unwrap().insert(
+            serde_yaml::Value::from("type"),
+            serde_yaml::Value::from("readwise"),
+        );
 
         debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
 
@@ -166,8 +162,7 @@ impl Exporter {
     }
 
     fn sanitize_title(&self, title: &str) -> String {
-        self.sanitizer.replace_all(title, "")
-            .replace(":", "-")
+        self.sanitizer.replace_all(title, "").replace(":", "-")
     }
 }
 
@@ -195,7 +190,11 @@ async fn main() -> Result<(), anyhow::Error> {
         readwise.fetch_library().await?
     };
 
-    info!("Collected library of {} books and {} highlights", library.books.len(), library.highlights.len());
+    info!(
+        "Collected library of {} books and {} highlights",
+        library.books.len(),
+        library.highlights.len()
+    );
 
     let exporter = Exporter::new(library, &cli)?;
     exporter.export()?;

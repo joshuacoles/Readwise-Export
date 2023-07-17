@@ -1,8 +1,8 @@
-use std::fmt::{Display, Formatter};
-use std::time::Duration;
 use chrono::{DateTime, Utc};
 use reqwest::header::AUTHORIZATION;
 use reqwest::{StatusCode, Url};
+use std::fmt::{Display, Formatter};
+use std::time::Duration;
 
 pub struct Readwise {
     token: String,
@@ -10,10 +10,10 @@ pub struct Readwise {
     api_page_size: i32,
 }
 
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
-use tracing::{debug, info};
 use crate::Library;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Book {
@@ -78,9 +78,7 @@ impl Readwise {
         }
     }
 
-    pub async fn fetch_library(
-        &self,
-    ) -> anyhow::Result<Library> {
+    pub async fn fetch_library(&self) -> anyhow::Result<Library> {
         Ok(Library {
             books: self.fetch_books(None).await?,
             highlights: self.fetch_highlights(None).await?,
@@ -88,14 +86,15 @@ impl Readwise {
         })
     }
 
-    pub async fn update_library(
-        &self,
-        library: &mut Library,
-    ) -> anyhow::Result<()> {
+    pub async fn update_library(&self, library: &mut Library) -> anyhow::Result<()> {
         let last_updated = library.updated_at;
 
-        library.books.extend(self.fetch_books(Some(last_updated)).await?);
-        library.highlights.extend(self.fetch_highlights(Some(last_updated)).await?);
+        library
+            .books
+            .extend(self.fetch_books(Some(last_updated)).await?);
+        library
+            .highlights
+            .extend(self.fetch_highlights(Some(last_updated)).await?);
         library.updated_at = Utc::now();
 
         Ok(())
@@ -105,32 +104,31 @@ impl Readwise {
         &self,
         last_updated: Option<DateTime<Utc>>,
     ) -> Result<Vec<Book>, anyhow::Error> {
-        self.fetch_paged(
-            Resource::Books,
-            last_updated,
-        ).await
+        self.fetch_paged(Resource::Books, last_updated).await
     }
 
     pub async fn fetch_highlights(
         &self,
         last_updated: Option<DateTime<Utc>>,
     ) -> Result<Vec<Highlight>, anyhow::Error> {
-        self.fetch_paged(
-            Resource::Highlights,
-            last_updated,
-        ).await
+        self.fetch_paged(Resource::Highlights, last_updated).await
     }
 
-    pub(crate) async fn fetch_paged<T: DeserializeOwned>(&self, resource: Resource, last_updated: Option<DateTime<Utc>>) -> Result<Vec<T>, anyhow::Error> {
+    pub(crate) async fn fetch_paged<T: DeserializeOwned>(
+        &self,
+        resource: Resource,
+        last_updated: Option<DateTime<Utc>>,
+    ) -> Result<Vec<T>, anyhow::Error> {
         info!(
             "Fetching {} from Readwise, since {}",
             resource,
-            last_updated.map(|v| v.to_rfc3339()).unwrap_or("[all]".to_string())
+            last_updated
+                .map(|v| v.to_rfc3339())
+                .unwrap_or("[all]".to_string())
         );
 
         let mut url = self.api_endpoint.clone();
-        url.path_segments_mut()
-            .unwrap().push(match resource {
+        url.path_segments_mut().unwrap().push(match resource {
             Resource::Books => "books",
             Resource::Highlights => "highlights",
         });
@@ -156,7 +154,8 @@ impl Readwise {
                 .await?;
 
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                let retry_delay = response.headers()
+                let retry_delay = response
+                    .headers()
                     .get("Retry-After")
                     .map(|v| v.to_str().unwrap())
                     .map(|v| v.parse::<u64>().unwrap())
@@ -170,14 +169,13 @@ impl Readwise {
                 return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
             }
 
-            let mut response = response.json::<CollectionResponse<T>>()
-                .await?;
+            let mut response = response.json::<CollectionResponse<T>>().await?;
 
             debug!(
                 "Received api response: count={count}, next={next:?}, previous={previous:?}",
-                count=response.count,
-                next=response.next,
-                previous=response.previous,
+                count = response.count,
+                next = response.next,
+                previous = response.previous,
             );
 
             entities.append(&mut response.results);
