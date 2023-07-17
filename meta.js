@@ -1,6 +1,8 @@
 function metadata({ book, highlights }) {
     return {
-        ...book,
-        bob: true
+        id: book.id,
+        updated: book.updated,
+        title: book.title,
+        author: book.author
     };
 }

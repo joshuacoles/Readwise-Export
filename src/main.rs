@@ -84,6 +84,7 @@ impl Exporter {
             templates: {
                 let mut tera = Tera::default();
                 tera.add_template_file(&cli.template, Some("book"))?;
+
                 debug!(
                     "Loaded tera templates for markdown. Templates: {}",
                     tera.get_template_names().join(", ")
@@ -134,8 +135,28 @@ impl Exporter {
 
         let context = {
             let mut context = Context::from_value(serde_json::to_value(book)?)?;
+            let augmented_highlights = highlights.iter()
+                .map(|highlight| {
+                    let mut v = serde_json::to_value(highlight).unwrap();
+                    if let Some(asin) = &book.asin {
+                        v.as_object_mut()
+                            .unwrap()
+                            .insert(
+                                String::from("location_url"),
+                                tera::Value::from(format!(
+                                    "https://readwise.io/to_kindle?action=open&asin={asin}&location={location}",
+                                    asin=asin,
+                                    location=&highlight.location,
+                                ))
+                            );
+                    }
+
+                    v
+                })
+                .collect_vec();
+            
             context.insert("book", &book);
-            context.insert("highlights", &highlights);
+            context.insert("highlights", &augmented_highlights);
             context
         };
 
@@ -175,16 +196,23 @@ async fn main() -> Result<(), anyhow::Error> {
     let readwise = readwise::Readwise::new(&cli.api_token);
 
     let library = if let Some(cache) = &cli.library {
-        info!("Loading library from cache: {:?}", cache);
-        let mut library: Library = serde_json::from_reader(std::fs::File::open(cache)?)?;
-
-        if cli.refetch {
-            info!("Fetching updates since {:?}", library.updated_at);
-            readwise.update_library(&mut library).await?;
+        if !cache.exists() {
+            info!("No cache found at {:?}. Fetching whole library from readwise.", cache);
+            let library: Library = readwise.fetch_library().await?;
             serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
-        }
+            library
+        } else {
+            info!("Loading library from cache: {:?}", cache);
+            let mut library: Library = serde_json::from_reader(std::fs::File::open(cache)?)?;
 
-        library
+            if cli.refetch {
+                info!("Fetching updates since {:?}", library.updated_at);
+                readwise.update_library(&mut library).await?;
+                serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+            }
+
+            library
+        }
     } else {
         info!("Fetching whole library from readwise. No persistence configured.");
         readwise.fetch_library().await?
