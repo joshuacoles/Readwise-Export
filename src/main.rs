@@ -148,7 +148,7 @@ impl Exporter {
 
         // We hardcode the type to 'readwise' so that we can find these documents later.
         metadata.as_mapping_mut().unwrap().insert(
-            serde_yaml::Value::from("type"),
+            serde_yaml::Value::from("note-kind"),
             serde_yaml::Value::from("readwise"),
         );
 
