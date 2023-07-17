@@ -109,7 +109,15 @@ impl Exporter {
 
         for (category, books) in bc {
             debug!("Starting export of category: {}", category);
-            let category_root = self.export_root.join(category);
+            let category_title = {
+                let mut c = category.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            };
+
+            let category_root = self.export_root.join(category_title);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
                 self.export_book(&category_root, book)?.write()?;
@@ -136,6 +144,7 @@ impl Exporter {
         let context = {
             let mut context = Context::from_value(serde_json::to_value(book)?)?;
             let augmented_highlights = highlights.iter()
+                .sorted_by_key(|h| h.location)
                 .map(|highlight| {
                     let mut v = serde_json::to_value(highlight).unwrap();
                     if let Some(asin) = &book.asin {
