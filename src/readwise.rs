@@ -150,7 +150,7 @@ impl Readwise {
 
         loop {
             let response = reqwest::Client::new()
-                .get(dbg!(next_url.clone()))
+                .get(next_url.clone())
                 .header(AUTHORIZATION, format!("Token {}", self.token))
                 .send()
                 .await?;

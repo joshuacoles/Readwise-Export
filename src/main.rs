@@ -159,10 +159,15 @@ impl Exporter {
         let contents = self.templates
             .render("book", &context)?;
 
-        let metadata: serde_yaml::Value = match &self.metadata_script {
+        let mut metadata: serde_yaml::Value = match &self.metadata_script {
             None => serde_yaml::to_value(&book)?,
             Some(script) => script.execute(book, &highlights)?,
         };
+
+        // We hardcode the type to readwise so that we can use it in the templates
+        metadata.as_mapping_mut()
+            .unwrap()
+            .insert(serde_yaml::Value::from("type"), serde_yaml::Value::from("readwise"));
 
         debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
 
