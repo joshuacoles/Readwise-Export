@@ -14,7 +14,7 @@ mod obsidian;
 mod readwise;
 mod scripting;
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 struct Cli {
     /// The root of the obsidian vault
     #[arg(long)]
@@ -193,6 +193,8 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
+    debug!("Parsed CLI: {:?}", &cli);
+
     let readwise = readwise::Readwise::new(&cli.api_token);
 
     let library = if let Some(cache) = &cli.library {
