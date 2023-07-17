@@ -1,10 +1,8 @@
-use std::cell::RefCell;
 use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
 use regex::Regex;
-use rhai::Engine;
 use serde::{Deserialize, Serialize};
 use tera::{Context, Tera};
 use tracing::{debug, info};
@@ -92,18 +90,7 @@ impl Exporter {
     ) -> anyhow::Result<Self> {
         let metadata_script = match &cli.metadata_script {
             None => None,
-            Some(path) if path.extension().unwrap() == "js" => {
-                debug!("Loading javascript metadata script from {:?}", path);
-                let script = js_sandbox::Script::from_file(path)?;
-                Some(ScriptType::Javascript { script: RefCell::new(script) })
-            }
-
-            Some(path) => {
-                debug!("Loading rhai metadata script from {:?}", path);
-                let engine = Engine::new();
-                let metadata_script = engine.compile_file(path.to_path_buf())?;
-                Some(ScriptType::Rhai { metadata_script, engine })
-            }
+            Some(path) => ScriptType::new(path)?,
         };
 
         Ok(Exporter {
@@ -164,7 +151,7 @@ impl Exporter {
             Some(script) => script.execute(book, &highlights)?,
         };
 
-        // We hardcode the type to readwise so that we can use it in the templates
+        // We hardcode the type to 'readwise' so that we can find these documents later.
         metadata.as_mapping_mut()
             .unwrap()
             .insert(serde_yaml::Value::from("type"), serde_yaml::Value::from("readwise"));
