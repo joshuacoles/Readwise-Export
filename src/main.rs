@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::readwise::{Book, Highlight};
 use chrono::{DateTime, Utc};
 use clap::Parser;
@@ -7,6 +8,7 @@ use regex::Regex;
 use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use obsidian_rust_interface::Vault;
 use tera::{Context, Tera};
 use tracing::{debug, info};
 
@@ -69,6 +71,14 @@ struct Exporter {
 
     templates: Tera,
     metadata_script: Option<ScriptType>,
+
+    existing: HashMap<i32, PathBuf>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReadwiseBrand {
+    #[serde(rename = "__readwise_fk")]
+    id: i32,
 }
 
 impl Exporter {
@@ -95,6 +105,12 @@ impl Exporter {
             metadata_script,
 
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
+            existing: Vault::open(&cli.vault)
+                .notes()
+                .filter_map(|n| n.ok())
+                .filter_map(|n| n.metadata::<ReadwiseBrand>().ok()
+                    .map(|m| (m.id, n.path().to_path_buf())))
+                .collect(),
         })
     }
 
@@ -120,7 +136,8 @@ impl Exporter {
             let category_root = self.export_root.join(category_title);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
-                self.export_book(&category_root, book)?.write()?;
+                self.export_book(&category_root, book)?
+                    .write(self.existing.get(&book.id))?;
             }
         }
 
@@ -154,16 +171,16 @@ impl Exporter {
                                 String::from("location_url"),
                                 tera::Value::from(format!(
                                     "https://readwise.io/to_kindle?action=open&asin={asin}&location={location}",
-                                    asin=asin,
-                                    location=&highlight.location,
-                                ))
+                                    asin = asin,
+                                    location = &highlight.location,
+                                )),
                             );
                     }
 
                     v
                 })
                 .collect_vec();
-            
+
             context.insert("book", &book);
             context.insert("highlights", &augmented_highlights);
             context
@@ -182,10 +199,16 @@ impl Exporter {
             serde_yaml::Value::from("readwise"),
         );
 
+        metadata.as_mapping_mut().unwrap().insert(
+            serde_yaml::Value::from("__readwise_fk"),
+            serde_yaml::Value::from(book.id),
+        );
+
         debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
 
         Ok(NoteToWrite {
-            path: root.join(title).with_extension("md"),
+            readwise_id: book.id,
+            default_path: root.join(title).with_extension("md"),
             contents,
             metadata,
         })
