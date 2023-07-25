@@ -14,7 +14,7 @@ mod obsidian;
 mod readwise;
 mod scripting;
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Deserialize)]
 struct Cli {
     /// The root of the obsidian vault
     #[arg(long)]

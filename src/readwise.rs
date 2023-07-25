@@ -92,9 +92,11 @@ impl Readwise {
         library
             .books
             .extend(self.fetch_books(Some(last_updated)).await?);
+
         library
             .highlights
             .extend(self.fetch_highlights(Some(last_updated)).await?);
+
         library.updated_at = Utc::now();
 
         Ok(())
