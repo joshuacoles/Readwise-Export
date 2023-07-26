@@ -8,7 +8,7 @@ use regex::Regex;
 use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use obsidian_rust_interface::Vault;
+use obsidian_rust_interface::{Vault, NoteReference, VaultNote};
 use tera::{Context, Tera};
 use tracing::{debug, info};
 
@@ -72,7 +72,7 @@ struct Exporter {
     templates: Tera,
     metadata_script: Option<ScriptType>,
 
-    existing: HashMap<i32, PathBuf>,
+    remaining_existing: HashMap<i32, PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -105,7 +105,8 @@ impl Exporter {
             metadata_script,
 
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
-            existing: Vault::open(&cli.vault)
+
+            remaining_existing: Vault::open(&cli.vault)
                 .notes()
                 .filter_map(|n| n.ok())
                 .filter_map(|n| n.metadata::<ReadwiseBrand>().ok()
@@ -114,7 +115,7 @@ impl Exporter {
         })
     }
 
-    fn export(&self) -> anyhow::Result<()> {
+    fn export(&mut self) -> anyhow::Result<()> {
         let by_category = self
             .library
             .books
@@ -137,7 +138,7 @@ impl Exporter {
             std::fs::create_dir_all(&category_root)?;
             for book in books {
                 self.export_book(&category_root, book)?
-                    .write(self.existing.get(&book.id))?;
+                    .write(self.remaining_existing.remove(&book.id).as_ref())?;
             }
         }
 
@@ -148,7 +149,7 @@ impl Exporter {
         &self,
         root: &PathBuf,
         book: &Book,
-    ) -> anyhow::Result<NoteToWrite<serde_yaml::Value>> {
+    ) -> anyhow::Result<NoteToWrite<i32, serde_yaml::Value>> {
         debug!(
             "Starting export of book '{}' into '{:?}'",
             book.title, &root
@@ -217,6 +218,18 @@ impl Exporter {
     fn sanitize_title(&self, title: &str) -> String {
         self.sanitizer.replace_all(title, "").replace(":", "-")
     }
+
+    fn mark_stranded(&self) {
+        let remaining = &self.remaining_existing;
+        for i in remaining.values() {
+            let mut note = NoteReference::from_path(&i).parse::<serde_yaml::Value>().unwrap();
+            note.metadata.as_mapping_mut()
+                .unwrap()
+                .insert(serde_yaml::Value::from("stranded"), serde_yaml::Value::from(true));
+
+            note.write().unwrap();
+        }
+    }
 }
 
 #[tokio::main]
@@ -258,8 +271,9 @@ async fn main() -> Result<(), anyhow::Error> {
         library.highlights.len()
     );
 
-    let exporter = Exporter::new(library, &cli)?;
+    let mut exporter = Exporter::new(library, &cli)?;
     exporter.export()?;
+    exporter.mark_stranded()?;
 
     Ok(())
 }

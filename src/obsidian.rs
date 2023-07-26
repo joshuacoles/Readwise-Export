@@ -4,8 +4,8 @@ use anyhow::anyhow;
 use tracing::debug;
 use crate::obsidian::WriteOutcome::{Created, Updated};
 
-pub struct NoteToWrite<T> {
-    pub readwise_id: i32,
+pub struct NoteToWrite<K, T> {
+    pub readwise_id: K,
     pub default_path: PathBuf,
     pub metadata: T,
     pub contents: String,
@@ -17,7 +17,7 @@ pub enum WriteOutcome {
     Updated
 }
 
-impl<T: Serialize> NoteToWrite<T> {
+impl<K, T: Serialize> NoteToWrite<K, T> {
     pub fn write(&self, existing: Option<&PathBuf>) -> anyhow::Result<WriteOutcome> {
         let (outcome, path) = if let Some(existing) = existing {
             (Updated, existing)
