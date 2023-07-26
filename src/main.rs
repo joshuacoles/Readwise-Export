@@ -1,4 +1,5 @@
 use crate::readwise::{Book, Highlight};
+use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
@@ -114,7 +115,6 @@ impl Exporter {
             },
             metadata_script,
 
-            mark_stranded: cli.mark_stranded,
             ignore_existing: cli.ignore_existing,
 
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
@@ -215,15 +215,21 @@ impl Exporter {
         };
 
         // We hardcode the type to 'readwise' so that we can find these documents later.
-        metadata.as_mapping_mut().unwrap().insert(
-            serde_yaml::Value::from("note-kind"),
-            serde_yaml::Value::from("readwise"),
-        );
+        metadata
+            .as_mapping_mut()
+            .expect("Metadata was not a mapping, this is invalid")
+            .insert(
+                serde_yaml::Value::from("note-kind"),
+                serde_yaml::Value::from("readwise"),
+            );
 
-        metadata.as_mapping_mut().unwrap().insert(
-            serde_yaml::Value::from("__readwise_fk"),
-            serde_yaml::Value::from(book.id),
-        );
+        metadata
+            .as_mapping_mut()
+            .expect("Metadata was not a mapping, this is invalid")
+            .insert(
+                serde_yaml::Value::from("__readwise_fk"),
+                serde_yaml::Value::from(book.id),
+            );
 
         debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
 
@@ -239,20 +245,25 @@ impl Exporter {
         self.sanitizer.replace_all(title, "").replace(":", "-")
     }
 
-    fn mark_stranded(&self) {
+    fn mark_stranded(&self) -> anyhow::Result<()> {
         let remaining = &self.remaining_existing;
         for i in remaining.values() {
             let mut note = NoteReference::from_path(&i)
                 .parse::<serde_yaml::Value>()
-                .unwrap();
+                .context("Failed to parse note metadata")?;
 
-            note.metadata.as_mapping_mut().unwrap().insert(
-                serde_yaml::Value::from("stranded"),
-                serde_yaml::Value::from(true),
-            );
+            note.metadata
+                .as_mapping_mut()
+                .expect("Metadata was not a mapping, this is invalid")
+                .insert(
+                    serde_yaml::Value::from("stranded"),
+                    serde_yaml::Value::from(true),
+                );
 
-            note.write().unwrap();
+            note.write()?;
         }
+
+        Ok(())
     }
 }
 
