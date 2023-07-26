@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use crate::readwise::{Book, Highlight};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
 use obsidian::NoteToWrite;
+use obsidian_rust_interface::{NoteReference, Vault};
 use regex::Regex;
 use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use obsidian_rust_interface::{Vault, NoteReference, VaultNote};
 use tera::{Context, Tera};
 use tracing::{debug, info};
 
@@ -46,6 +46,14 @@ struct Cli {
     /// A template or directory of templates to use for exporting
     #[arg(long)]
     template: PathBuf,
+
+    /// Ignore existing files, all notes will be written to their default locations
+    #[arg(long, default_value = "false")]
+    ignore_existing: bool,
+
+    /// Mark notes as stranded if they no longer correspond to a Readwise book
+    #[arg(long, default_value = "true")]
+    mark_stranded: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -73,6 +81,8 @@ struct Exporter {
     metadata_script: Option<ScriptType>,
 
     remaining_existing: HashMap<i32, PathBuf>,
+
+    ignore_existing: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,13 +114,19 @@ impl Exporter {
             },
             metadata_script,
 
+            mark_stranded: cli.mark_stranded,
+            ignore_existing: cli.ignore_existing,
+
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
 
             remaining_existing: Vault::open(&cli.vault)
                 .notes()
                 .filter_map(|n| n.ok())
-                .filter_map(|n| n.metadata::<ReadwiseBrand>().ok()
-                    .map(|m| (m.id, n.path().to_path_buf())))
+                .filter_map(|n| {
+                    n.metadata::<ReadwiseBrand>()
+                        .ok()
+                        .map(|m| (m.id, n.path().to_path_buf()))
+                })
                 .collect(),
         })
     }
@@ -137,8 +153,12 @@ impl Exporter {
             let category_root = self.export_root.join(category_title);
             std::fs::create_dir_all(&category_root)?;
             for book in books {
-                self.export_book(&category_root, book)?
-                    .write(self.remaining_existing.remove(&book.id).as_ref())?;
+                self.export_book(&category_root, book)?.write(
+                    self.remaining_existing
+                        .remove(&book.id)
+                        .filter(|_| !self.ignore_existing)
+                        .as_ref(),
+                )?;
             }
         }
 
@@ -222,10 +242,14 @@ impl Exporter {
     fn mark_stranded(&self) {
         let remaining = &self.remaining_existing;
         for i in remaining.values() {
-            let mut note = NoteReference::from_path(&i).parse::<serde_yaml::Value>().unwrap();
-            note.metadata.as_mapping_mut()
-                .unwrap()
-                .insert(serde_yaml::Value::from("stranded"), serde_yaml::Value::from(true));
+            let mut note = NoteReference::from_path(&i)
+                .parse::<serde_yaml::Value>()
+                .unwrap();
+
+            note.metadata.as_mapping_mut().unwrap().insert(
+                serde_yaml::Value::from("stranded"),
+                serde_yaml::Value::from(true),
+            );
 
             note.write().unwrap();
         }
@@ -244,7 +268,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let library = if let Some(cache) = &cli.library {
         if !cache.exists() {
-            info!("No cache found at {:?}. Fetching whole library from readwise.", cache);
+            info!(
+                "No cache found at {:?}. Fetching whole library from readwise.",
+                cache
+            );
             let library: Library = readwise.fetch_library().await?;
             serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
             library
@@ -273,7 +300,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut exporter = Exporter::new(library, &cli)?;
     exporter.export()?;
-    exporter.mark_stranded()?;
+
+    if cli.mark_stranded {
+        exporter.mark_stranded()?;
+    }
 
     Ok(())
 }

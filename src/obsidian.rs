@@ -1,8 +1,8 @@
+use crate::obsidian::WriteOutcome::{Created, Updated};
+use anyhow::anyhow;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use anyhow::anyhow;
 use tracing::debug;
-use crate::obsidian::WriteOutcome::{Created, Updated};
 
 pub struct NoteToWrite<K, T> {
     pub readwise_id: K,
@@ -14,7 +14,7 @@ pub struct NoteToWrite<K, T> {
 #[derive(Clone, Copy, Debug)]
 pub enum WriteOutcome {
     Created,
-    Updated
+    Updated,
 }
 
 impl<K, T: Serialize> NoteToWrite<K, T> {
@@ -22,7 +22,9 @@ impl<K, T: Serialize> NoteToWrite<K, T> {
         let (outcome, path) = if let Some(existing) = existing {
             (Updated, existing)
         } else {
-            let parent = self.default_path.parent()
+            let parent = self
+                .default_path
+                .parent()
                 .filter(|p| *p != Path::new(""))
                 .ok_or(anyhow!("Invalid note location, lacks meaningful parent"))?;
 
