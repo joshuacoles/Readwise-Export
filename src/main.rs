@@ -3,17 +3,17 @@ use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
-use obsidian::NoteToWrite;
 use obsidian_rust_interface::{NoteReference, Vault};
 use regex::Regex;
 use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use obsidian_rust_interface::joining::JoinedNote;
+use obsidian_rust_interface::joining::strategies::Branded;
 use tera::{Context, Tera};
 use tracing::{debug, info};
 
-mod obsidian;
 mod readwise;
 mod scripting;
 
@@ -81,15 +81,9 @@ struct Exporter {
     templates: Tera,
     metadata_script: Option<ScriptType>,
 
-    remaining_existing: HashMap<i32, PathBuf>,
+    remaining_existing: HashMap<i32, NoteReference>,
 
     ignore_existing: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ReadwiseBrand {
-    #[serde(rename = "__readwise_fk")]
-    id: i32,
 }
 
 impl Exporter {
@@ -98,6 +92,12 @@ impl Exporter {
             None => None,
             Some(path) => Some(ScriptType::new(path)?),
         };
+
+        let vault = Vault::open(&cli.vault);
+        let existing = obsidian_rust_interface::joining::find_by::<_, i32>(
+            &vault,
+            &Branded { brand_key: "".to_string() }
+        );
 
         Ok(Exporter {
             library,
@@ -116,18 +116,8 @@ impl Exporter {
             metadata_script,
 
             ignore_existing: cli.ignore_existing,
-
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
-
-            remaining_existing: Vault::open(&cli.vault)
-                .notes()
-                .filter_map(|n| n.ok())
-                .filter_map(|n| {
-                    n.metadata::<ReadwiseBrand>()
-                        .ok()
-                        .map(|m| (m.id, n.path().to_path_buf()))
-                })
-                .collect(),
+            remaining_existing: existing,
         })
     }
 
@@ -157,6 +147,7 @@ impl Exporter {
                     self.remaining_existing
                         .remove(&book.id)
                         .filter(|_| !self.ignore_existing)
+                        .map(|n| n.to_path_buf())
                         .as_ref(),
                 )?;
             }
@@ -169,7 +160,7 @@ impl Exporter {
         &self,
         root: &PathBuf,
         book: &Book,
-    ) -> anyhow::Result<NoteToWrite<i32, serde_yaml::Value>> {
+    ) -> anyhow::Result<JoinedNote<i32, serde_yaml::Value>> {
         debug!(
             "Starting export of book '{}' into '{:?}'",
             book.title, &root
@@ -233,8 +224,8 @@ impl Exporter {
 
         debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
 
-        Ok(NoteToWrite {
-            readwise_id: book.id,
+        Ok(JoinedNote {
+            note_id: book.id,
             default_path: root.join(title).with_extension("md"),
             contents,
             metadata,
@@ -247,8 +238,8 @@ impl Exporter {
 
     fn mark_stranded(&self) -> anyhow::Result<()> {
         let remaining = &self.remaining_existing;
-        for i in remaining.values() {
-            let mut note = NoteReference::from_path(&i)
+        for note_reference in remaining.values() {
+            let mut note = note_reference
                 .parse::<serde_yaml::Value>()
                 .context("Failed to parse note metadata")?;
 
