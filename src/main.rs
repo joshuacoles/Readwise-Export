@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use obsidian_rust_interface::joining::JoinedNote;
 use obsidian_rust_interface::joining::strategies::TypeAndKey;
 use tera::{Context, Tera};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 mod readwise;
 mod scripting;
@@ -216,8 +216,12 @@ impl Exporter {
 
         let contents = if let Some(existing_note) = existing_note {
             let existing_file_contents = existing_note.parts::<serde_yaml::Mapping>()?.1;
-            let highlights_begin_index = existing_file_contents.find(highlights_begin_token);
-            let persisted_contents = existing_file_contents.split_at(highlights_begin_index.unwrap_or(0)).0;
+            let highlights_begin_index = existing_file_contents.find(highlights_begin_token).unwrap_or_else(|| {
+                warn!("Existing note for book '{}' did not contain highlights begin token", &book.title);
+                0
+            });
+
+            let persisted_contents = existing_file_contents.split_at(highlights_begin_index).0;
 
             persisted_contents.to_string()
         } else {
