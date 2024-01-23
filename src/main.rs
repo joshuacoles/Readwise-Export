@@ -1,7 +1,7 @@
 use crate::readwise::{Book, Highlight};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 use obsidian_rust_interface::{NoteReference, Vault};
 use regex::Regex;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use obsidian_rust_interface::joining::JoinedNote;
-use obsidian_rust_interface::joining::strategies::Branded;
+use obsidian_rust_interface::joining::strategies::TypeAndKey;
 use tera::{Context, Tera};
 use tracing::{debug, info};
 
@@ -44,17 +44,37 @@ struct Cli {
     #[arg(long)]
     metadata_script: Option<PathBuf>,
 
-    /// A template or directory of templates to use for exporting
+    /// The template used for the initial contents of a book note. The highlights will be rendered directly after this
+    /// initial content.
     #[arg(long)]
-    template: PathBuf,
+    book_template: PathBuf,
 
-    /// Ignore existing files, all notes will be written to their default locations
-    #[arg(long, default_value = "false")]
-    ignore_existing: bool,
+    /// The template used for each highlight in a book note. These will be rendered after the end of the book note
+    /// template, with an inserted %% HIGHLIGHTS_BEGIN %% tag separating the two sections.
+    #[arg(long)]
+    highlight_template: PathBuf,
+
+    /// The strategy to use when replacing existing notes
+    #[arg(long, default_value = "update")]
+    replacement_strategy: ReplacementStrategy,
 
     /// Mark notes as stranded if they no longer correspond to a Readwise book
     #[arg(long, default_value = "true")]
     mark_stranded: bool,
+}
+
+#[derive(ValueEnum, Debug, Clone, Deserialize)]
+enum ReplacementStrategy {
+    /// Update the highlights in the existing files wherever they are located, create new files for new books in the
+    /// default location.
+    Update,
+
+    /// Replace the contents of the existing files for books which already exist but leave them where they are located,
+    /// create new files for new books in the default location.
+    Replace,
+
+    /// Create new files for all books in the default location, ignoring existing files.
+    IgnoreExisting,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -83,7 +103,7 @@ struct Exporter {
 
     remaining_existing: HashMap<i32, NoteReference>,
 
-    ignore_existing: bool,
+    replacement_strategy: ReplacementStrategy,
 }
 
 impl Exporter {
@@ -96,15 +116,22 @@ impl Exporter {
         let vault = Vault::open(&cli.vault);
         let existing = obsidian_rust_interface::joining::find_by::<_, i32>(
             &vault,
-            &Branded { brand_key: "".to_string() }
+            &TypeAndKey {
+                type_key: "note-kind".to_string(),
+                note_type: "readwise".to_string(),
+                id_key: "__readwise_fk".to_string(),
+            },
         );
+
+        debug!("Found {} existing notes", existing.len());
 
         Ok(Exporter {
             library,
             export_root: cli.vault.join(&cli.base_folder),
             templates: {
                 let mut tera = Tera::default();
-                tera.add_template_file(&cli.template, Some("book"))?;
+                tera.add_template_file(&cli.book_template, Some("book"))?;
+                tera.add_template_file(&cli.highlight_template, Some("highlight"))?;
 
                 debug!(
                     "Loaded tera templates for markdown. Templates: {}",
@@ -115,7 +142,7 @@ impl Exporter {
             },
             metadata_script,
 
-            ignore_existing: cli.ignore_existing,
+            replacement_strategy: cli.replacement_strategy.clone(),
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
             remaining_existing: existing,
         })
@@ -146,23 +173,75 @@ impl Exporter {
             std::fs::create_dir_all(&category_root)?;
 
             for book in books {
-                self.export_book(&category_root, book)?.write(
-                    self.remaining_existing
-                        .remove(&book.id)
-                        .filter(|_| !self.ignore_existing)
-                        .map(|n| n.to_path_buf())
-                        .as_ref(),
-                )?;
+                let existing_note = self.remaining_existing
+                    .remove(&book.id);
+
+                let existing_file = existing_note
+                    .clone()
+                    .map(|n| n.to_path_buf());
+
+                match self.replacement_strategy {
+                    ReplacementStrategy::Update => {
+                        self.export_book(&category_root, book, existing_note.as_ref())?
+                            .write(existing_file.as_ref())?;
+                    }
+
+                    ReplacementStrategy::Replace => {
+                        self.export_book(&category_root, book, None)?
+                            .write(existing_file.as_ref())?;
+                    }
+
+                    ReplacementStrategy::IgnoreExisting => {
+                        if let Some(existing_file_path) = &existing_file {
+                            debug!("Ignoring existing file '{:?}' for book '{}'", existing_file_path, &book.title);
+                        }
+
+                        self.export_book(&category_root, book, None)?.write(None)?;
+                    }
+                }
             }
         }
 
         Ok(())
     }
 
+    fn render_templates(
+        &self,
+        book: &&Book,
+        highlights: &Vec<&Highlight>,
+        existing_note: Option<&NoteReference>,
+    ) -> anyhow::Result<String> {
+        let template_context = Self::create_template_context(&book, &highlights)?;
+        let highlights_begin_token = "%% HIGHLIGHTS_BEGIN %%";
+
+        let contents = if let Some(existing_note) = existing_note {
+            let existing_file_contents = existing_note.parts::<serde_yaml::Mapping>()?.1;
+            let highlights_begin_index = existing_file_contents.find(highlights_begin_token);
+            let persisted_contents = existing_file_contents.split_at(highlights_begin_index.unwrap_or(0)).0;
+
+            persisted_contents.to_string()
+        } else {
+            self.templates.render("book", &template_context)?
+        };
+
+        let highlight_contents = highlights.iter().map(|highlight| {
+            let mut highlight_context = template_context.clone();
+            highlight_context.insert("highlight", &highlight);
+
+            self.templates.render("highlight", &highlight_context)
+        }).collect::<Result<Vec<String>, _>>()?;
+
+        let highlight_contents = highlight_contents.join("\n\n");
+        let highlight_contents = highlight_contents.trim();
+
+        Ok(format!("{}\n\n%% HIGHLIGHTS_BEGIN %%\n\n{}\n", contents.trim(), highlight_contents))
+    }
+
     fn export_book(
         &self,
         root: &PathBuf,
         book: &Book,
+        existing_note: Option<&NoteReference>,
     ) -> anyhow::Result<JoinedNote<i32, serde_yaml::Value>> {
         debug!(
             "Starting export of book '{}' into '{:?}'",
@@ -173,6 +252,44 @@ impl Exporter {
         let highlights = self.library.highlights_for(book);
         debug!("Found {} highlights in library", highlights.len());
 
+        let contents = self.render_templates(
+            &book,
+            &highlights,
+            existing_note,
+        )?;
+
+        let mut metadata: serde_yaml::Value = match &self.metadata_script {
+            None => serde_yaml::to_value(&book)?,
+            Some(script) => script.execute(book, &highlights)?,
+        };
+
+        {
+            let metadata = metadata
+                .as_mapping_mut()
+                .expect("Metadata was not a mapping, this is invalid");
+
+            metadata.insert(
+                serde_yaml::Value::from("note-kind"),
+                serde_yaml::Value::from("readwise"),
+            );
+
+            metadata.insert(
+                serde_yaml::Value::from("__readwise_fk"),
+                serde_yaml::Value::from(book.id),
+            );
+        }
+
+        debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
+
+        Ok(JoinedNote {
+            note_id: book.id,
+            default_path: root.join(title).with_extension("md"),
+            contents,
+            metadata,
+        })
+    }
+
+    fn create_template_context(book: &&Book, highlights: &Vec<&Highlight>) -> anyhow::Result<Context> {
         let context = {
             let mut context = Context::from_value(serde_json::to_value(book)?)?;
             let augmented_highlights = highlights.iter()
@@ -200,39 +317,7 @@ impl Exporter {
             context.insert("highlights", &augmented_highlights);
             context
         };
-
-        let contents = self.templates.render("book", &context)?;
-
-        let mut metadata: serde_yaml::Value = match &self.metadata_script {
-            None => serde_yaml::to_value(&book)?,
-            Some(script) => script.execute(book, &highlights)?,
-        };
-
-        // We hardcode the type to 'readwise' so that we can find these documents later.
-        metadata
-            .as_mapping_mut()
-            .expect("Metadata was not a mapping, this is invalid")
-            .insert(
-                serde_yaml::Value::from("note-kind"),
-                serde_yaml::Value::from("readwise"),
-            );
-
-        metadata
-            .as_mapping_mut()
-            .expect("Metadata was not a mapping, this is invalid")
-            .insert(
-                serde_yaml::Value::from("__readwise_fk"),
-                serde_yaml::Value::from(book.id),
-            );
-
-        debug!("Computed metadata for book {:?} as {:?}", &book, metadata);
-
-        Ok(JoinedNote {
-            note_id: book.id,
-            default_path: root.join(title).with_extension("md"),
-            contents,
-            metadata,
-        })
+        Ok(context)
     }
 
     fn sanitize_title(&self, title: &str) -> String {
