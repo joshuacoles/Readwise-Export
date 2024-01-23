@@ -1,5 +1,5 @@
 use crate::readwise::{Book, Highlight};
-use anyhow::Context as _;
+use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use itertools::Itertools;
@@ -128,20 +128,23 @@ impl Exporter {
             .iter()
             .group_by(|book| book.category.clone());
 
-        let bc = by_category.into_iter();
-
-        for (category, books) in bc {
+        for (category, books) in by_category.into_iter() {
             debug!("Starting export of category: {}", category);
+
             let category_title = {
                 let mut c = category.chars();
                 match c.next() {
-                    None => String::new(),
-                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => None,
+                    Some(f) => Some(f.to_uppercase().collect::<String>() + c.as_str()),
                 }
             };
 
+            let category_title = category_title
+                .ok_or(anyhow!("Invalid category {category}"))?;
+
             let category_root = self.export_root.join(category_title);
             std::fs::create_dir_all(&category_root)?;
+
             for book in books {
                 self.export_book(&category_root, book)?.write(
                     self.remaining_existing
