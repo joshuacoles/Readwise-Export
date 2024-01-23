@@ -1,0 +1,15 @@
+> [!rw]
+> {{ highlight.text | trim | indent(prefix='> ') | replace(from="
+
+", to="
+>
+") }}
+> {%- if highlight.location_url %} ([{{ highlight.location }}]({{ highlight.location_url }})) {%- endif %}
+{%- if highlight.note %}
+> ---
+> {{ highlight.note | trim | indent(prefix='> ') | replace(from="
+
+", to="
+>
+") }}{%- endif %}
+^{{ highlight.id }}
