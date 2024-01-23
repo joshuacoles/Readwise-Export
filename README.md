@@ -6,4 +6,4 @@ is likely substantially more useful to the average user and should be used inste
 
 Mainly a playground for a more general framework of X -> Obsidian conversion utilities.
 
-See the help message for documentation if you want to use this.
+See the help message for documentation if you want to use this, or the example command line in `live-export.sh`.
