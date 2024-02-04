@@ -36,9 +36,13 @@ struct Cli {
     #[arg(long)]
     library: Option<PathBuf>,
 
-    /// If true, will fetch data from the Readwise API, updating the cache
+    /// The strategy to use when fetching data from the Readwise API
+    #[arg(long, default_value = "cache")]
+    fetch: FetchStrategy,
+
+    /// If true, will not export any notes, only fetch data from the Readwise API
     #[arg(long, short, default_value = "false")]
-    refetch: bool,
+    no_export: bool,
 
     /// If custom metadata should be written, a script to generate it
     #[arg(long)]
@@ -61,6 +65,14 @@ struct Cli {
     /// Mark notes as stranded if they no longer correspond to a Readwise book
     #[arg(long, default_value = "true")]
     mark_stranded: bool,
+
+    /// If true, will skip exporting books with no highlights
+    #[arg(long, default_value = "true")]
+    skip_empty: bool,
+
+    /// If set, will only export books from this category
+    #[arg(long)]
+    filter_category: Option<String>,
 }
 
 #[derive(ValueEnum, Debug, Clone, Deserialize)]
@@ -75,6 +87,18 @@ enum ReplacementStrategy {
 
     /// Create new files for all books in the default location, ignoring existing files.
     IgnoreExisting,
+}
+
+#[derive(ValueEnum, Debug, Clone, Deserialize)]
+enum FetchStrategy {
+    /// Do not fetch any data from the Readwise API, only use the library cache
+    Cache,
+
+    /// Ask for updates from the Readwise API since the last update to the library cache
+    Update,
+
+    /// Refetch the whole library from the Readwise API
+    Refetch,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -104,6 +128,8 @@ struct Exporter {
     remaining_existing: HashMap<i32, NoteReference>,
 
     replacement_strategy: ReplacementStrategy,
+    skip_empty: bool,
+    filter_category: Option<String>,
 }
 
 impl Exporter {
@@ -145,6 +171,8 @@ impl Exporter {
             replacement_strategy: cli.replacement_strategy.clone(),
             sanitizer: Regex::new(r#"[<>"'/\\|?*]+"#).unwrap(),
             remaining_existing: existing,
+            skip_empty: cli.skip_empty,
+            filter_category: cli.filter_category.clone(),
         })
     }
 
@@ -153,6 +181,21 @@ impl Exporter {
             .library
             .books
             .iter()
+            .filter(|book| {
+                if self.skip_empty {
+                    // No need to collect all highlights for the book now, just see if there are any
+                    self.library.highlights.iter().any(|h| h.book_id == book.id)
+                } else {
+                    return true;
+                }
+            })
+            .filter(|book| {
+                if let Some(filtered_category) = &self.filter_category {
+                    book.category == *filtered_category
+                } else {
+                    return true;
+                }
+            })
             .group_by(|book| book.category.clone());
 
         for (category, books) in by_category.into_iter() {
@@ -363,7 +406,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let library = if let Some(cache) = &cli.library {
         if !cache.exists() {
             info!(
-                "No cache found at {:?}. Fetching whole library from readwise.",
+                "No cache found at {:?}. Fetching whole library from readwise. Ignoring any refetch options.",
                 cache
             );
             let library: Library = readwise.fetch_library().await?;
@@ -373,10 +416,20 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("Loading library from cache: {:?}", cache);
             let mut library: Library = serde_json::from_reader(std::fs::File::open(cache)?)?;
 
-            if cli.refetch {
-                info!("Fetching updates since {:?}", library.updated_at);
-                readwise.update_library(&mut library).await?;
-                serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+            match cli.fetch {
+                FetchStrategy::Cache => {}
+
+                FetchStrategy::Update => {
+                    info!("Fetching updates since {:?}", library.updated_at);
+                    readwise.update_library(&mut library).await?;
+                    serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+                }
+
+                FetchStrategy::Refetch => {
+                    info!("Fetching whole library from readwise");
+                    readwise.update_library(&mut library).await?;
+                    serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
+                }
             }
 
             library
@@ -391,6 +444,11 @@ async fn main() -> Result<(), anyhow::Error> {
         library.books.len(),
         library.highlights.len()
     );
+
+    if cli.no_export {
+        info!("No export requested, exiting");
+        return Ok(());
+    }
 
     let mut exporter = Exporter::new(library, &cli)?;
     exporter.export()?;
