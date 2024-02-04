@@ -63,7 +63,7 @@ struct Cli {
     replacement_strategy: ReplacementStrategy,
 
     /// Mark notes as stranded if they no longer correspond to a Readwise book
-    #[arg(long, default_value = "true")]
+    #[arg(long)]
     mark_stranded: bool,
 
     /// If true, will skip exporting books with no highlights
