@@ -271,7 +271,7 @@ impl Exporter {
             self.templates.render("book", &template_context)?
         };
 
-        let highlight_contents = highlights.iter().map(|highlight| {
+        let highlight_contents = highlights.iter().rev().map(|highlight| {
             let mut highlight_context = template_context.clone();
             highlight_context.insert("highlight", &highlight);
 
