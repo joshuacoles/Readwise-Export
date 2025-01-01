@@ -31,6 +31,20 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    # Install OpenSSL and pkg-config for Linux builds
+    - name: Install OpenSSL (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libssl-dev
+
+    # Install OpenSSL for macOS builds
+    - name: Install OpenSSL (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install openssl@3
+        echo 'export OPENSSL_DIR=$(brew --prefix openssl@3)' >> $GITHUB_ENV
+
     - name: Set up Rust
       uses: actions-rs/toolchain@v1
       with:
