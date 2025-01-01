@@ -1,0 +1,60 @@
+name: Multi-Platform Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - os: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+          
+          # Linux x86_64
+          - os: ubuntu-latest
+            arch: amd64
+            target: x86_64-unknown-linux-gnu
+          
+          # Linux ARM64
+          - os: ubuntu-latest
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target ${{ matrix.target }}
+
+    # Optional - run tests
+    # - name: Run tests
+    #   uses: actions-rs/cargo@v1
+    #   with:
+    #     command: test
+    #     args: --target ${{ matrix.target }}
+
+    # Archive the built binaries
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.os }}-${{ matrix.arch }}-build
+        path: |
+          target/${{ matrix.target }}/release/*
