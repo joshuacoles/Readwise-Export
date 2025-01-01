@@ -196,7 +196,7 @@ impl Exporter {
                     return true;
                 }
             })
-            .group_by(|book| book.category.clone());
+            .chunk_by(|book| book.category.clone());
 
         for (category, books) in by_category.into_iter() {
             debug!("Starting export of category: {}", category);
@@ -258,7 +258,7 @@ impl Exporter {
         let highlights_begin_token = "%% HIGHLIGHTS_BEGIN %%";
 
         let contents = if let Some(existing_note) = existing_note {
-            let existing_file_contents = existing_note.parts::<serde_yaml::Mapping>()?.1;
+            let existing_file_contents = existing_note.parts::<serde_yml::Mapping>()?.1;
             let highlights_begin_index = existing_file_contents.find(highlights_begin_token).unwrap_or_else(|| {
                 warn!("Existing note for book '{}' did not contain highlights begin token", &book.title);
                 0
@@ -289,7 +289,7 @@ impl Exporter {
         root: &PathBuf,
         book: &Book,
         existing_note: Option<&NoteReference>,
-    ) -> anyhow::Result<JoinedNote<i32, serde_yaml::Value>> {
+    ) -> anyhow::Result<JoinedNote<i32, serde_yml::Value>> {
         debug!(
             "Starting export of book '{}' into '{:?}'",
             book.title, &root
@@ -305,8 +305,8 @@ impl Exporter {
             existing_note,
         )?;
 
-        let mut metadata: serde_yaml::Value = match &self.metadata_script {
-            None => serde_yaml::to_value(&book)?,
+        let mut metadata: serde_yml::Value = match &self.metadata_script {
+            None => serde_yml::to_value(&book)?,
             Some(script) => script.execute(book, &highlights)?,
         };
 
@@ -316,13 +316,13 @@ impl Exporter {
                 .expect("Metadata was not a mapping, this is invalid");
 
             metadata.insert(
-                serde_yaml::Value::from("note-kind"),
-                serde_yaml::Value::from("readwise"),
+                serde_yml::Value::from("note-kind"),
+                serde_yml::Value::from("readwise"),
             );
 
             metadata.insert(
-                serde_yaml::Value::from("__readwise_fk"),
-                serde_yaml::Value::from(book.id),
+                serde_yml::Value::from("__readwise_fk"),
+                serde_yml::Value::from(book.id),
             );
         }
 
@@ -375,15 +375,15 @@ impl Exporter {
         let remaining = &self.remaining_existing;
         for note_reference in remaining.values() {
             let mut note = note_reference
-                .parse::<serde_yaml::Value>()
+                .parse::<serde_yml::Value>()
                 .context("Failed to parse note metadata")?;
 
             note.metadata
                 .as_mapping_mut()
                 .expect("Metadata was not a mapping, this is invalid")
                 .insert(
-                    serde_yaml::Value::from("stranded"),
-                    serde_yaml::Value::from(true),
+                    serde_yml::Value::from("stranded"),
+                    serde_yml::Value::from(true),
                 );
 
             note.write()?;

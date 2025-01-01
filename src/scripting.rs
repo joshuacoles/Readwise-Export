@@ -45,7 +45,7 @@ impl ScriptType {
         &self,
         book: &Book,
         highlights: &[&Highlight],
-    ) -> anyhow::Result<serde_yaml::Value> {
+    ) -> anyhow::Result<serde_yml::Value> {
         match self {
             ScriptType::Rhai {
                 metadata_script,
@@ -66,7 +66,7 @@ impl ScriptType {
                 let dynamic: Dynamic =
                     engine.eval_ast_with_scope::<Dynamic>(&mut scope, metadata_script)?;
 
-                Ok(serde_yaml::to_value(&dynamic)?)
+                Ok(serde_yml::to_value(&dynamic)?)
             }
 
             ScriptType::Javascript { script } => {
@@ -78,7 +78,7 @@ impl ScriptType {
                     }),
                 )?;
 
-                Ok(serde_yaml::to_value(&a)?)
+                Ok(serde_yml::to_value(&a)?)
             }
         }
     }
