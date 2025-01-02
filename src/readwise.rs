@@ -13,6 +13,7 @@ pub struct Readwise {
 use crate::Library;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tracing::{debug, info};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,6 +192,56 @@ impl Readwise {
 
         return Ok(entities);
     }
+
+    pub async fn fetch_document_list(
+        &self,
+        updated_after: Option<DateTime<Utc>>,
+        location: Option<String>,
+    ) -> Result<Vec<Document>, anyhow::Error> {
+        let mut url = Url::parse("https://readwise.io/api/v3/list").unwrap();
+        let mut full_data = Vec::new();
+        let mut next_page_cursor: Option<String> = None;
+
+        loop {
+            let mut query_params = url.query_pairs_mut();
+
+            if let Some(cursor) = &next_page_cursor {
+                query_params.append_pair("pageCursor", cursor);
+            }
+
+            if let Some(updated) = updated_after {
+                query_params.append_pair("updatedAfter", &updated.to_rfc3339());
+            }
+
+            if let Some(loc) = &location {
+                query_params.append_pair("location", loc);
+            }
+
+            drop(query_params);
+
+            debug!("Making export api request with params: {}", url.query().unwrap_or(""));
+
+            let response = reqwest::Client::new()
+                .get(url.clone())
+                .header(AUTHORIZATION, format!("Token {}", self.token))
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
+            }
+
+            let response_json: DocumentListResponse = response.json().await?;
+            full_data.extend(response_json.results);
+            next_page_cursor = response_json.next_page_cursor;
+
+            if next_page_cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(full_data)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,4 +250,37 @@ struct CollectionResponse<T> {
     next: Option<String>,
     previous: Option<String>,
     results: Vec<T>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocumentListResponse {
+    results: Vec<Document>,
+    next_page_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Document {
+    pub id: String,
+    pub url: String,
+    pub source_url: String,
+    pub title: String,
+    pub author: String,
+    pub source: String,
+    pub category: String,
+    pub location: String,
+    pub tags: Value,
+    pub site_name: String,
+    pub word_count: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub notes: String,
+    pub published_date: Option<String>,
+    pub summary: String,
+    pub image_url: Option<String>,
+    pub parent_id: Option<String>,
+    pub reading_progress: f32,
+    pub first_opened_at: Option<DateTime<Utc>>,
+    pub last_opened_at: Option<DateTime<Utc>>,
+    pub saved_at: DateTime<Utc>,
+    pub last_moved_at: DateTime<Utc>,
 }
