@@ -19,6 +19,36 @@ mod scripting;
 
 #[derive(Debug, Parser, Deserialize)]
 struct Cli {
+    /// The location of the library cache file
+    #[arg(long)]
+    library: PathBuf,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Parser, Deserialize)]
+enum Commands {
+    /// Fetch data from Readwise API
+    Fetch(FetchCommand),
+    
+    /// Export highlights to markdown files
+    Export(ExportCommand),
+}
+
+#[derive(Debug, Parser, Deserialize)]
+struct FetchCommand {
+    /// Readwise API token
+    #[arg(long)]
+    api_token: String,
+
+    /// The strategy to use when fetching data from the Readwise API
+    #[arg(long, default_value = "cache")]
+    strategy: FetchStrategy,
+}
+
+#[derive(Debug, Parser, Deserialize)]
+struct ExportCommand {
     /// The root of the obsidian vault
     #[arg(long)]
     vault: PathBuf,
@@ -28,33 +58,18 @@ struct Cli {
     #[arg(long)]
     base_folder: String,
 
-    /// Readwise API token
-    #[arg(long)]
-    api_token: String,
-
-    /// Store library data in a JSON file for caching between executions
-    #[arg(long)]
-    library: Option<PathBuf>,
-
-    /// The strategy to use when fetching data from the Readwise API
-    #[arg(long, default_value = "cache")]
-    fetch: FetchStrategy,
-
-    /// If true, will not export any notes, only fetch data from the Readwise API
-    #[arg(long, short, default_value = "false")]
-    no_export: bool,
-
     /// If custom metadata should be written, a script to generate it
     #[arg(long)]
     metadata_script: Option<PathBuf>,
 
-    /// The template used for the initial contents of a book note. The highlights will be rendered directly after this
-    /// initial content.
+    /// The template used for the initial contents of a book note. The highlights will be rendered
+    /// directly after this initial content.
     #[arg(long)]
     book_template: PathBuf,
 
-    /// The template used for each highlight in a book note. These will be rendered after the end of the book note
-    /// template, with an inserted %% HIGHLIGHTS_BEGIN %% tag separating the two sections.
+    /// The template used for each highlight in a book note. These will be rendered after the end
+    /// of the book note template, with an inserted %% HIGHLIGHTS_BEGIN %% tag separating the two
+    /// sections.
     #[arg(long)]
     highlight_template: PathBuf,
 
@@ -134,7 +149,7 @@ struct Exporter {
 }
 
 impl Exporter {
-    fn new(library: Library, cli: &Cli) -> anyhow::Result<Self> {
+    fn new(library: Library, cli: &ExportCommand) -> anyhow::Result<Self> {
         let metadata_script = match &cli.metadata_script {
             None => None,
             Some(path) => Some(ScriptType::new(path)?),
@@ -396,66 +411,60 @@ impl Exporter {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // Install global collector configured based on RUST_LOG env var.
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
     debug!("Parsed CLI: {:?}", &cli);
 
-    let readwise = readwise::Readwise::new(&cli.api_token);
+    match &cli.command {
+        Commands::Fetch(fetch_cmd) => {
+            let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
 
-    let library = if let Some(cache) = &cli.library {
-        if !cache.exists() {
+            let library = if !cli.library.exists() {
+                info!(
+                    "No cache found at {:?}. Fetching whole library from readwise.",
+                    cli.library
+                );
+                let library: Library = readwise.fetch_library().await?;
+                serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
+                library
+            } else {
+                info!("Loading library from cache: {:?}", cli.library);
+                let mut library: Library = serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
+
+                match fetch_cmd.strategy {
+                    FetchStrategy::Cache => {}
+                    FetchStrategy::Update => {
+                        info!("Fetching updates since {:?}", library.updated_at);
+                        readwise.update_library(&mut library).await?;
+                        serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
+                    }
+                    FetchStrategy::Refetch => {
+                        info!("Fetching whole library from readwise");
+                        library = readwise.fetch_library().await?;
+                        serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
+                    }
+                }
+                library
+            };
+
             info!(
-                "No cache found at {:?}. Fetching whole library from readwise. Ignoring any refetch options.",
-                cache
+                "Collected library of {} books and {} highlights",
+                library.books.len(),
+                library.highlights.len()
             );
-            let library: Library = readwise.fetch_library().await?;
-            serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
-            library
-        } else {
-            info!("Loading library from cache: {:?}", cache);
-            let mut library: Library = serde_json::from_reader(std::fs::File::open(cache)?)?;
-
-            match cli.fetch {
-                FetchStrategy::Cache => {}
-
-                FetchStrategy::Update => {
-                    info!("Fetching updates since {:?}", library.updated_at);
-                    readwise.update_library(&mut library).await?;
-                    serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
-                }
-
-                FetchStrategy::Refetch => {
-                    info!("Fetching whole library from readwise");
-                    readwise.update_library(&mut library).await?;
-                    serde_json::to_writer(std::fs::File::create(cache)?, &library)?;
-                }
-            }
-
-            library
         }
-    } else {
-        info!("Fetching whole library from readwise. No persistence configured.");
-        readwise.fetch_library().await?
-    };
 
-    info!(
-        "Collected library of {} books and {} highlights",
-        library.books.len(),
-        library.highlights.len()
-    );
+        Commands::Export(export_cmd) => {
+            let library: Library = serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
+            
+            let mut exporter = Exporter::new(library, export_cmd)?;
+            exporter.export()?;
 
-    if cli.no_export {
-        info!("No export requested, exiting");
-        return Ok(());
-    }
-
-    let mut exporter = Exporter::new(library, &cli)?;
-    exporter.export()?;
-
-    if cli.mark_stranded {
-        exporter.mark_stranded()?;
+            if export_cmd.mark_stranded {
+                exporter.mark_stranded()?;
+            }
+        }
     }
 
     Ok(())
