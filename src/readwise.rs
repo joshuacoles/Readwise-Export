@@ -83,6 +83,7 @@ impl Readwise {
         Ok(Library {
             books: self.fetch_books(None).await?,
             highlights: self.fetch_highlights(None).await?,
+            documents: self.fetch_document_list(None, None).await?,
             updated_at: Utc::now(),
         })
     }
@@ -97,6 +98,10 @@ impl Readwise {
         library
             .highlights
             .extend(self.fetch_highlights(Some(last_updated)).await?);
+
+        library
+            .documents
+            .extend(self.fetch_document_list(Some(last_updated), None).await?);
 
         library.updated_at = Utc::now();
 
@@ -198,28 +203,40 @@ impl Readwise {
         updated_after: Option<DateTime<Utc>>,
         location: Option<String>,
     ) -> Result<Vec<Document>, anyhow::Error> {
+        info!(
+            "Fetching reader documents from Readwise, since {}",
+            updated_after
+                .map(|v| v.to_rfc3339())
+                .unwrap_or("[all]".to_string())
+        );
+
         let mut url = Url::parse("https://readwise.io/api/v3/list").unwrap();
         let mut full_data = Vec::new();
         let mut next_page_cursor: Option<String> = None;
 
+        debug!("Readwise api url: {}", url);
+
         loop {
-            let mut query_params = url.query_pairs_mut();
+            {
+                let mut query_params = url.query_pairs_mut();
 
-            if let Some(cursor) = &next_page_cursor {
-                query_params.append_pair("pageCursor", cursor);
+                if let Some(cursor) = &next_page_cursor {
+                    query_params.append_pair("pageCursor", cursor);
+                }
+
+                if let Some(updated) = updated_after {
+                    query_params.append_pair("updatedAfter", &updated.to_rfc3339());
+                }
+
+                if let Some(loc) = &location {
+                    query_params.append_pair("location", loc);
+                }
             }
 
-            if let Some(updated) = updated_after {
-                query_params.append_pair("updatedAfter", &updated.to_rfc3339());
-            }
-
-            if let Some(loc) = &location {
-                query_params.append_pair("location", loc);
-            }
-
-            drop(query_params);
-
-            debug!("Making export api request with params: {}", url.query().unwrap_or(""));
+            debug!(
+                "Making export api request with params: {}",
+                url.query().unwrap_or("")
+            );
 
             let response = reqwest::Client::new()
                 .get(url.clone())
@@ -227,11 +244,33 @@ impl Readwise {
                 .send()
                 .await?;
 
-            if !response.status().is_success() {
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                let retry_delay = response
+                    .headers()
+                    .get("Retry-After")
+                    .map(|v| v.to_str().unwrap())
+                    .map(|v| v.parse::<u64>().unwrap())
+                    .unwrap_or(5);
+
+                debug!("Rate limited, retrying in {} seconds", retry_delay);
+
+                tokio::time::sleep(Duration::from_secs(retry_delay)).await;
+                continue;
+            } else if !response.status().is_success() {
                 return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
             }
 
-            let response_json: DocumentListResponse = response.json().await?;
+            let raw = response.json::<Value>().await?;
+            debug!("Raw result {:?}", raw);
+
+            let response_json: DocumentListResponse = serde_json::from_value(raw)?;
+
+            debug!(
+                "Received api response: results={}, next_cursor={:?}",
+                response_json.results.len(),
+                response_json.next_page_cursor
+            );
+
             full_data.extend(response_json.results);
             next_page_cursor = response_json.next_page_cursor;
 
@@ -239,6 +278,8 @@ impl Readwise {
                 break;
             }
         }
+
+        debug!("Fetched {} documents total", full_data.len());
 
         Ok(full_data)
     }
@@ -258,29 +299,74 @@ struct DocumentListResponse {
     next_page_cursor: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
-    pub id: String,
-    pub url: String,
-    pub source_url: String,
-    pub title: String,
-    pub author: String,
-    pub source: String,
-    pub category: String,
-    pub location: String,
-    pub tags: Value,
-    pub site_name: String,
-    pub word_count: i32,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub notes: String,
-    pub published_date: Option<String>,
-    pub summary: String,
-    pub image_url: Option<String>,
-    pub parent_id: Option<String>,
-    pub reading_progress: f32,
-    pub first_opened_at: Option<DateTime<Utc>>,
-    pub last_opened_at: Option<DateTime<Utc>>,
-    pub saved_at: DateTime<Utc>,
-    pub last_moved_at: DateTime<Utc>,
+    id: String,
+    url: String,
+    title: Option<String>,
+    author: Option<String>,
+    source: Source,
+    category: Category,
+    location: Option<Location>,
+    tags: Option<Tags>,
+    site_name: Option<String>,
+    word_count: Option<i64>,
+    created_at: String,
+    updated_at: String,
+    published_date: Option<PublishedDate>,
+    summary: Option<String>,
+    image_url: Option<String>,
+    content: Option<String>,
+    source_url: Option<String>,
+    notes: String,
+    parent_id: Option<String>,
+    reading_progress: f64,
+    first_opened_at: Option<String>,
+    last_opened_at: Option<String>,
+    saved_at: String,
+    last_moved_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    Article,
+    Highlight,
+    Pdf,
+    Rss,
+    Video,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Location {
+    Archive,
+    Feed,
+    New,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PublishedDate {
+    Integer(i64),
+    String(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Source {
+    #[serde(rename = "Reader add from clipboard")]
+    ReaderAddFromClipboard,
+    #[serde(rename = "Reader in app link save")]
+    ReaderInAppLinkSave,
+    #[serde(rename = "reader-mobile-app")]
+    ReaderMobileApp,
+    #[serde(rename = "Reader RSS")]
+    ReaderRss,
+    #[serde(rename = "Reader Share Sheet iOS")]
+    ReaderShareSheetIOs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tags {
 }

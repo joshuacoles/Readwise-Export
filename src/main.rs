@@ -1,4 +1,4 @@
-use crate::readwise::{Book, Highlight};
+use crate::readwise::{Book, Document, Highlight};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};
@@ -106,6 +106,7 @@ pub struct Library {
     books: Vec<Book>,
     highlights: Vec<Highlight>,
     updated_at: DateTime<Utc>,
+    documents: Vec<Document>,
 }
 
 impl Library {
