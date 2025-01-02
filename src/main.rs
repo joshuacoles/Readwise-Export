@@ -126,10 +126,16 @@ enum FetchStrategy {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Library {
+    #[serde(default)]
     books: Vec<Book>,
+
+    #[serde(default)]
     highlights: Vec<Highlight>,
-    updated_at: DateTime<Utc>,
+
+    #[serde(default)]
     documents: Vec<Document>,
+
+    updated_at: DateTime<Utc>,
 }
 
 impl Library {
