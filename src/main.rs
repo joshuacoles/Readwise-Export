@@ -409,7 +409,9 @@ impl Exporter {
     }
 
     fn sanitize_title(&self, title: &str) -> String {
-        self.sanitizer.replace_all(title, "").replace(":", "-")
+        self.sanitizer.replace_all(title, "")
+            .replace(":", "-")
+            .replace(".", "-") // Logic for determining file extensions breaks if we have dots in the title
     }
 
     fn mark_stranded(&self) -> anyhow::Result<()> {
