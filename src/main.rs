@@ -20,7 +20,7 @@ mod scripting;
 #[derive(Debug, Parser, Deserialize)]
 struct Cli {
     /// The location of the library cache file
-    #[arg(long, from_global)]
+    #[arg(long)]
     library: PathBuf,
 
     #[command(subcommand)]
