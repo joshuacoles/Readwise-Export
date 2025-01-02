@@ -3,14 +3,14 @@ use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
+use obsidian_rust_interface::joining::strategies::TypeAndKey;
+use obsidian_rust_interface::joining::JoinedNote;
 use obsidian_rust_interface::{NoteReference, Vault};
 use regex::Regex;
 use scripting::ScriptType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use obsidian_rust_interface::joining::JoinedNote;
-use obsidian_rust_interface::joining::strategies::TypeAndKey;
 use tera::{Context, Tera};
 use tracing::{debug, info, warn};
 
@@ -31,7 +31,7 @@ struct Cli {
 enum Commands {
     /// Fetch data from Readwise API
     Fetch(FetchCommand),
-    
+
     /// Export highlights to markdown files
     Export(ExportCommand),
 }
@@ -39,12 +39,23 @@ enum Commands {
 #[derive(Debug, Parser, Deserialize)]
 struct FetchCommand {
     /// Readwise API token
-    #[arg(long)]
+    #[arg(long, env = "READWISE_API_TOKEN")]
     api_token: String,
 
     /// The strategy to use when fetching data from the Readwise API
     #[arg(long, default_value = "cache")]
     strategy: FetchStrategy,
+
+    /// Only export the listed kind of records from readwise. Allows multiple.
+    #[arg(long, short)]
+    kind: Vec<ReadwiseObjectKind>,
+}
+
+#[derive(ValueEnum, Debug, Clone, Deserialize)]
+enum ReadwiseObjectKind {
+    Book,
+    Highlight,
+    ReaderDocument,
 }
 
 #[derive(Debug, Parser, Deserialize)]
@@ -225,19 +236,15 @@ impl Exporter {
                 }
             };
 
-            let category_title = category_title
-                .ok_or(anyhow!("Invalid category {category}"))?;
+            let category_title = category_title.ok_or(anyhow!("Invalid category {category}"))?;
 
             let category_root = self.export_root.join(category_title);
             std::fs::create_dir_all(&category_root)?;
 
             for book in books {
-                let existing_note = self.remaining_existing
-                    .remove(&book.id);
+                let existing_note = self.remaining_existing.remove(&book.id);
 
-                let existing_file = existing_note
-                    .clone()
-                    .map(|n| n.to_path_buf());
+                let existing_file = existing_note.clone().map(|n| n.to_path_buf());
 
                 match self.replacement_strategy {
                     ReplacementStrategy::Update => {
@@ -252,7 +259,10 @@ impl Exporter {
 
                     ReplacementStrategy::IgnoreExisting => {
                         if let Some(existing_file_path) = &existing_file {
-                            debug!("Ignoring existing file '{:?}' for book '{}'", existing_file_path, &book.title);
+                            debug!(
+                                "Ignoring existing file '{:?}' for book '{}'",
+                                existing_file_path, &book.title
+                            );
                         }
 
                         self.export_book(&category_root, book, None)?.write(None)?;
@@ -275,10 +285,15 @@ impl Exporter {
 
         let contents = if let Some(existing_note) = existing_note {
             let existing_file_contents = existing_note.parts::<serde_yml::Mapping>()?.1;
-            let highlights_begin_index = existing_file_contents.find(highlights_begin_token).unwrap_or_else(|| {
-                warn!("Existing note for book '{}' did not contain highlights begin token", &book.title);
-                0
-            });
+            let highlights_begin_index = existing_file_contents
+                .find(highlights_begin_token)
+                .unwrap_or_else(|| {
+                    warn!(
+                        "Existing note for book '{}' did not contain highlights begin token",
+                        &book.title
+                    );
+                    0
+                });
 
             let persisted_contents = existing_file_contents.split_at(highlights_begin_index).0;
 
@@ -287,17 +302,25 @@ impl Exporter {
             self.templates.render("book", &template_context)?
         };
 
-        let highlight_contents = highlights.iter().rev().map(|highlight| {
-            let mut highlight_context = template_context.clone();
-            highlight_context.insert("highlight", &highlight);
+        let highlight_contents = highlights
+            .iter()
+            .rev()
+            .map(|highlight| {
+                let mut highlight_context = template_context.clone();
+                highlight_context.insert("highlight", &highlight);
 
-            self.templates.render("highlight", &highlight_context)
-        }).collect::<Result<Vec<String>, _>>()?;
+                self.templates.render("highlight", &highlight_context)
+            })
+            .collect::<Result<Vec<String>, _>>()?;
 
         let highlight_contents = highlight_contents.join("\n\n");
         let highlight_contents = highlight_contents.trim();
 
-        Ok(format!("{}\n\n%% HIGHLIGHTS_BEGIN %%\n\n{}\n", contents.trim(), highlight_contents))
+        Ok(format!(
+            "{}\n\n%% HIGHLIGHTS_BEGIN %%\n\n{}\n",
+            contents.trim(),
+            highlight_contents
+        ))
     }
 
     fn export_book(
@@ -315,11 +338,7 @@ impl Exporter {
         let highlights = self.library.highlights_for(book);
         debug!("Found {} highlights in library", highlights.len());
 
-        let contents = self.render_templates(
-            &book,
-            &highlights,
-            existing_note,
-        )?;
+        let contents = self.render_templates(&book, &highlights, existing_note)?;
 
         let mut metadata: serde_yml::Value = match &self.metadata_script {
             None => serde_yml::to_value(&book)?,
@@ -352,7 +371,10 @@ impl Exporter {
         })
     }
 
-    fn create_template_context(book: &&Book, highlights: &Vec<&Highlight>) -> anyhow::Result<Context> {
+    fn create_template_context(
+        book: &&Book,
+        highlights: &Vec<&Highlight>,
+    ) -> anyhow::Result<Context> {
         let context = {
             let mut context = Context::from_value(serde_json::to_value(book)?)?;
             let augmented_highlights = highlights.iter()
@@ -430,7 +452,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 library
             } else {
                 info!("Loading library from cache: {:?}", cli.library);
-                let mut library: Library = serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
+                let mut library: Library =
+                    serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
 
                 match fetch_cmd.strategy {
                     FetchStrategy::Cache => {}
@@ -457,7 +480,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
         Commands::Export(export_cmd) => {
             let library: Library = serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
-            
+
             let mut exporter = Exporter::new(library, export_cmd)?;
             exporter.export()?;
 

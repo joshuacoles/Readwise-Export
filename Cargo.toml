@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "^1"
 chrono = { version = "^0.4", features = ["serde"] }
-clap = { version = "^4.3", features = ["derive"] }
+clap = { version = "^4.3", features = ["derive", "env"] }
 itertools = "0.14.0"
 js-sandbox = "0.1.6"
 obsidian-rust-interface = { git = "https://github.com/joshuacoles/Obsidian-Rust-Interface", version = "^0" }
