@@ -43,7 +43,7 @@ struct FetchCommand {
     api_token: String,
 
     /// The strategy to use when fetching data from the Readwise API
-    #[arg(long, default_value = "cache")]
+    #[arg(long, default_value = "update")]
     strategy: FetchStrategy,
 
     /// Only export the listed kind of records from readwise. Allows multiple.
@@ -117,9 +117,6 @@ enum ReplacementStrategy {
 
 #[derive(ValueEnum, Debug, Clone, Deserialize)]
 enum FetchStrategy {
-    /// Do not fetch any data from the Readwise API, only use the library cache
-    Cache,
-
     /// Ask for updates from the Readwise API since the last update to the library cache
     Update,
 
@@ -456,7 +453,6 @@ async fn main() -> Result<(), anyhow::Error> {
                     serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
 
                 match fetch_cmd.strategy {
-                    FetchStrategy::Cache => {}
                     FetchStrategy::Update => {
                         info!("Fetching updates since {:?}", library.updated_at);
                         readwise.update_library(&mut library).await?;
