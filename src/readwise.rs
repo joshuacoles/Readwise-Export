@@ -10,7 +10,7 @@ pub struct Readwise {
     api_page_size: i32,
 }
 
-use crate::Library;
+use crate::{Library, ReadwiseObjectKind};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,29 +79,52 @@ impl Readwise {
         }
     }
 
-    pub async fn fetch_library(&self) -> anyhow::Result<Library> {
+    pub async fn fetch_library(&self, kinds: &[ReadwiseObjectKind]) -> anyhow::Result<Library> {
         Ok(Library {
-            books: self.fetch_books(None).await?,
-            highlights: self.fetch_highlights(None).await?,
-            documents: self.fetch_document_list(None, None).await?,
+            books: if kinds.contains(&ReadwiseObjectKind::Book) {
+                self.fetch_books(None).await?
+            } else {
+                vec![]
+            },
+            highlights: if kinds.contains(&ReadwiseObjectKind::Highlight) {
+                self.fetch_highlights(None).await?
+            } else {
+                vec![]
+            },
+
+            documents: if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
+                self.fetch_document_list(None, None).await?
+            } else {
+                vec![]
+            },
             updated_at: Utc::now(),
         })
     }
 
-    pub async fn update_library(&self, library: &mut Library) -> anyhow::Result<()> {
+    pub async fn update_library(
+        &self,
+        library: &mut Library,
+        kinds: &[ReadwiseObjectKind],
+    ) -> anyhow::Result<()> {
         let last_updated = library.updated_at;
 
-        library
-            .books
-            .extend(self.fetch_books(Some(last_updated)).await?);
+        if kinds.contains(&ReadwiseObjectKind::Book) {
+            library
+                .books
+                .extend(self.fetch_books(Some(last_updated)).await?);
+        }
 
-        library
-            .highlights
-            .extend(self.fetch_highlights(Some(last_updated)).await?);
+        if kinds.contains(&ReadwiseObjectKind::Highlight) {
+            library
+                .highlights
+                .extend(self.fetch_highlights(Some(last_updated)).await?);
+        }
 
-        library
-            .documents
-            .extend(self.fetch_document_list(Some(last_updated), None).await?);
+        if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
+            library
+                .documents
+                .extend(self.fetch_document_list(Some(last_updated), None).await?);
+        }
 
         library.updated_at = Utc::now();
 
@@ -368,5 +391,4 @@ pub enum Source {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tags {
-}
+pub struct Tags {}

@@ -51,7 +51,7 @@ struct FetchCommand {
     kind: Vec<ReadwiseObjectKind>,
 }
 
-#[derive(ValueEnum, Debug, Clone, Deserialize)]
+#[derive(ValueEnum, Debug, Clone, Copy, Deserialize, Eq, PartialEq)]
 enum ReadwiseObjectKind {
     Book,
     Highlight,
@@ -438,13 +438,22 @@ async fn main() -> Result<(), anyhow::Error> {
     match &cli.command {
         Commands::Fetch(fetch_cmd) => {
             let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
+            let kinds = if fetch_cmd.kind.is_empty() {
+                vec![
+                    ReadwiseObjectKind::ReaderDocument,
+                    ReadwiseObjectKind::Book,
+                    ReadwiseObjectKind::Highlight,
+                ]
+            } else {
+                fetch_cmd.kind.clone()
+            };
 
             let library = if !cli.library.exists() {
                 info!(
                     "No cache found at {:?}. Fetching whole library from readwise.",
                     cli.library
                 );
-                let library: Library = readwise.fetch_library().await?;
+                let library: Library = readwise.fetch_library(&kinds).await?;
                 serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
                 library
             } else {
@@ -455,15 +464,16 @@ async fn main() -> Result<(), anyhow::Error> {
                 match fetch_cmd.strategy {
                     FetchStrategy::Update => {
                         info!("Fetching updates since {:?}", library.updated_at);
-                        readwise.update_library(&mut library).await?;
-                        serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
+                        readwise.update_library(&mut library, &kinds).await?;
                     }
+
                     FetchStrategy::Refetch => {
                         info!("Fetching whole library from readwise");
-                        library = readwise.fetch_library().await?;
-                        serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
+                        library = readwise.fetch_library(&kinds).await?;
                     }
                 }
+
+                serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
                 library
             };
 
