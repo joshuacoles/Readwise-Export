@@ -233,13 +233,13 @@ impl Readwise {
                 .unwrap_or("[all]".to_string())
         );
 
-        let mut url = Url::parse("https://readwise.io/api/v3/list").unwrap();
+        let mut base_url = Url::parse("https://readwise.io/api/v3/list").unwrap();
         let mut full_data = Vec::new();
         let mut next_page_cursor: Option<String> = None;
 
-        debug!("Readwise api url: {}", url);
-
         loop {
+            let mut url = base_url.clone();
+
             {
                 let mut query_params = url.query_pairs_mut();
 
@@ -299,6 +299,8 @@ impl Readwise {
 
             if next_page_cursor.is_none() {
                 break;
+            } else {
+                tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }
 
@@ -317,6 +319,7 @@ struct CollectionResponse<T> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DocumentListResponse {
     results: Vec<Document>,
     next_page_cursor: Option<String>,
@@ -328,10 +331,10 @@ pub struct Document {
     url: String,
     title: Option<String>,
     author: Option<String>,
-    source: Source,
-    category: Category,
-    location: Option<Location>,
-    tags: Option<Tags>,
+    source: Option<String>,
+    category: Option<String>,
+    location: Option<String>,
+    tags: Option<Value>,
     site_name: Option<String>,
     word_count: Option<i64>,
     created_at: String,
@@ -341,7 +344,7 @@ pub struct Document {
     image_url: Option<String>,
     content: Option<String>,
     source_url: Option<String>,
-    notes: String,
+    notes: Option<String>,
     parent_id: Option<String>,
     reading_progress: f64,
     first_opened_at: Option<String>,
@@ -351,44 +354,8 @@ pub struct Document {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Category {
-    Article,
-    Highlight,
-    Pdf,
-    Rss,
-    Video,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Location {
-    Archive,
-    Feed,
-    New,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PublishedDate {
     Integer(i64),
     String(String),
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Source {
-    #[serde(rename = "Reader add from clipboard")]
-    ReaderAddFromClipboard,
-    #[serde(rename = "Reader in app link save")]
-    ReaderInAppLinkSave,
-    #[serde(rename = "reader-mobile-app")]
-    ReaderMobileApp,
-    #[serde(rename = "Reader RSS")]
-    ReaderRss,
-    #[serde(rename = "Reader Share Sheet iOS")]
-    ReaderShareSheetIOs,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Tags {}
