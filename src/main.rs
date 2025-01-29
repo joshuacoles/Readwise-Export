@@ -1,4 +1,4 @@
-use crate::readwise::{Book, Document, Highlight};
+use crate::readwise::{Book, Document, Highlight, Tag};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};
@@ -14,14 +14,19 @@ use std::path::PathBuf;
 use tera::{Context, Tera};
 use tracing::{debug, info, warn};
 
+mod db;
 mod readwise;
 mod scripting;
 
 #[derive(Debug, Parser, Deserialize)]
 struct Cli {
-    /// The location of the library cache file
+    /// The location of the library cache file (deprecated, use --database-url instead)
     #[arg(long)]
-    library: PathBuf,
+    library: Option<PathBuf>,
+
+    /// SQLite database URL
+    #[arg(long, env = "DATABASE_URL", default_value = "sqlite:readwise.db")]
+    database_url: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -34,6 +39,16 @@ enum Commands {
 
     /// Export highlights to markdown files
     Export(ExportCommand),
+
+    /// Export database to JSON format
+    ExportJson(ExportJsonCommand),
+}
+
+#[derive(Debug, Parser, Deserialize)]
+struct ExportJsonCommand {
+    /// Path to output JSON file
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(Debug, Parser, Deserialize)]
@@ -443,6 +458,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
     debug!("Parsed CLI: {:?}", &cli);
 
+    let db = db::Database::new(&cli.database_url).await?;
+
     match &cli.command {
         Commands::Fetch(fetch_cmd) => {
             let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
@@ -456,51 +473,64 @@ async fn main() -> Result<(), anyhow::Error> {
                 fetch_cmd.kind.clone()
             };
 
-            let library = if !cli.library.exists() {
-                info!(
-                    "No cache found at {:?}. Fetching whole library from readwise.",
-                    cli.library
-                );
-                let library: Library = readwise.fetch_library(&kinds).await?;
-                serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
-                library
-            } else {
-                info!("Loading library from cache: {:?}", cli.library);
-                let mut library: Library =
-                    serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
-
-                match fetch_cmd.strategy {
-                    FetchStrategy::Update => {
-                        info!("Fetching updates since {:?}", library.updated_at);
-                        readwise.update_library(&mut library, &kinds).await?;
-                    }
-
-                    FetchStrategy::Refetch => {
-                        info!("Fetching whole library from readwise");
-                        library = readwise.fetch_library(&kinds).await?;
-                    }
-                }
-
-                serde_json::to_writer(std::fs::File::create(&cli.library)?, &library)?;
-                library
+            let last_sync = match fetch_cmd.strategy {
+                FetchStrategy::Update => db.get_last_sync().await?,
+                FetchStrategy::Refetch => None,
             };
 
-            info!(
-                "Collected library of {} books and {} highlights",
-                library.books.len(),
-                library.highlights.len()
-            );
+            if let Some(last_sync) = last_sync {
+                info!("Fetching updates since {}", last_sync);
+            } else {
+                info!("Fetching whole library from readwise");
+            }
+
+            let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
+
+            if kinds.contains(&ReadwiseObjectKind::Book) {
+                let books = readwise.fetch_books(last_sync).await?;
+                for book in books {
+                    db.insert_book(&book).await?;
+                }
+            }
+
+            if kinds.contains(&ReadwiseObjectKind::Highlight) {
+                let highlights = readwise.fetch_highlights(last_sync).await?;
+                for highlight in highlights {
+                    db.insert_highlight(&highlight).await?;
+                }
+            }
+
+            if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
+                let documents = readwise.fetch_document_list(last_sync, None).await?;
+                for document in documents {
+                    db.insert_document(&document).await?;
+                }
+            }
+
+            db.update_sync_state(Utc::now()).await?;
+
+            // If legacy library file is specified, export to JSON for compatibility
+            if let Some(library_path) = &cli.library {
+                info!("Exporting to legacy JSON format at {:?}", library_path);
+                let library = db.export_to_library().await?;
+                serde_json::to_writer(std::fs::File::create(library_path)?, &library)?;
+            }
         }
 
         Commands::Export(export_cmd) => {
-            let library: Library = serde_json::from_reader(std::fs::File::open(&cli.library)?)?;
-
+            let library = db.export_to_library().await?;
             let mut exporter = Exporter::new(library, export_cmd)?;
             exporter.export()?;
 
             if export_cmd.mark_stranded {
                 exporter.mark_stranded()?;
             }
+        }
+
+        Commands::ExportJson(export_cmd) => {
+            let library = db.export_to_library().await?;
+            serde_json::to_writer_pretty(std::fs::File::create(&export_cmd.output)?, &library)?;
+            info!("Exported library to {:?}", export_cmd.output);
         }
     }
 

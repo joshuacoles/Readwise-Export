@@ -1,0 +1,152 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM documents",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "url",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "author",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "source",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "category",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "location",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "site_name",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "word_count",
+        "ordinal": 8,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "published_date",
+        "ordinal": 11,
+        "type_info": "Text"
+      },
+      {
+        "name": "summary",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_url",
+        "ordinal": 13,
+        "type_info": "Text"
+      },
+      {
+        "name": "content",
+        "ordinal": 14,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_url",
+        "ordinal": 15,
+        "type_info": "Text"
+      },
+      {
+        "name": "notes",
+        "ordinal": 16,
+        "type_info": "Text"
+      },
+      {
+        "name": "parent_id",
+        "ordinal": 17,
+        "type_info": "Text"
+      },
+      {
+        "name": "reading_progress",
+        "ordinal": 18,
+        "type_info": "Float"
+      },
+      {
+        "name": "first_opened_at",
+        "ordinal": 19,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_opened_at",
+        "ordinal": 20,
+        "type_info": "Text"
+      },
+      {
+        "name": "saved_at",
+        "ordinal": 21,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_moved_at",
+        "ordinal": 22,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "cf81ebc22c4d867def76879aa476dc21d0b361d72e2465facc6111df033de720"
+}

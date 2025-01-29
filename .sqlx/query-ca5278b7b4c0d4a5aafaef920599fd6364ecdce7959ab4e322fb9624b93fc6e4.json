@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO books (\n                id, title, author, category, num_highlights,\n                last_highlight_at, updated, cover_image_url,\n                highlights_url, source_url, asin\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n            ON CONFLICT(id) DO UPDATE SET\n                title = excluded.title,\n                author = excluded.author,\n                category = excluded.category,\n                num_highlights = excluded.num_highlights,\n                last_highlight_at = excluded.last_highlight_at,\n                updated = excluded.updated,\n                cover_image_url = excluded.cover_image_url,\n                highlights_url = excluded.highlights_url,\n                source_url = excluded.source_url,\n                asin = excluded.asin\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "ca5278b7b4c0d4a5aafaef920599fd6364ecdce7959ab4e322fb9624b93fc6e4"
+}

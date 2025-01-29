@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                SELECT t.* FROM tags t\n                JOIN highlight_tags ht ON ht.tag_id = t.id\n                WHERE ht.highlight_id = ?\n                ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7b5b9c07ffe11b0d90fe7eb48c2ee46a81724250299d768e91d1ce4939c58671"
+}
