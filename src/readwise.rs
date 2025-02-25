@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use reqwest::header::AUTHORIZATION;
 use reqwest::{StatusCode, Url};
 use std::fmt::{Display, Formatter};
@@ -7,7 +7,7 @@ use std::time::Duration;
 pub struct Readwise {
     token: String,
     api_endpoint: Url,
-    api_page_size: i32,
+    api_page_size: i64,
 }
 
 use crate::{Library, ReadwiseObjectKind};
@@ -18,11 +18,11 @@ use tracing::{debug, info};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Book {
-    pub id: i32,
+    pub id: i64,
     pub title: String,
     pub author: Option<String>,
     pub category: String,
-    pub num_highlights: i32,
+    pub num_highlights: i64,
     pub last_highlight_at: Option<String>,
     pub updated: Option<String>,
     pub cover_image_url: Option<String>,
@@ -34,22 +34,22 @@ pub struct Book {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Highlight {
-    pub id: i32,
+    pub id: i64,
     pub text: String,
     pub note: String,
-    pub location: i32,
+    pub location: i64,
     pub location_type: String,
     pub highlighted_at: Option<String>,
     pub url: Option<String>,
     pub color: String,
     pub updated: String,
-    pub book_id: i32,
+    pub book_id: i64,
     pub tags: Vec<Tag>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tag {
-    pub id: i32,
+    pub id: i64,
     pub name: String,
 }
 
@@ -233,7 +233,7 @@ impl Readwise {
                 .unwrap_or("[all]".to_string())
         );
 
-        let mut base_url = Url::parse("https://readwise.io/api/v3/list").unwrap();
+        let base_url = Url::parse("https://readwise.io/api/v3/list").unwrap();
         let mut full_data = Vec::new();
         let mut next_page_cursor: Option<String> = None;
 
@@ -312,7 +312,7 @@ impl Readwise {
 
 #[derive(Debug, Deserialize)]
 struct CollectionResponse<T> {
-    count: i32,
+    count: i64,
     next: Option<String>,
     previous: Option<String>,
     results: Vec<T>,
@@ -358,4 +358,13 @@ pub struct Document {
 pub enum PublishedDate {
     Integer(i64),
     String(String),
+}
+
+impl PublishedDate {
+    pub(crate) fn as_date_time(&self) -> chrono::DateTime<Utc> {
+        match self {
+            PublishedDate::Integer(i) => Utc.timestamp_millis_opt(*i).unwrap(),
+            PublishedDate::String(s) => s.parse().unwrap(),
+        }
+    }
 }

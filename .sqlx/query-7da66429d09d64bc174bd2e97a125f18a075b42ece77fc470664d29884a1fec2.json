@@ -6,14 +6,14 @@
       {
         "name": "last_updated",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Datetime"
       }
     ],
     "parameters": {
       "Right": 0
     },
     "nullable": [
-      false
+      true
     ]
   },
   "hash": "7da66429d09d64bc174bd2e97a125f18a075b42ece77fc470664d29884a1fec2"

@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 mod db;
 mod readwise;
 mod scripting;
+mod library;
 
 #[derive(Debug, Parser, Deserialize)]
 struct Cli {
@@ -170,7 +171,7 @@ struct Exporter {
     templates: Tera,
     metadata_script: Option<ScriptType>,
 
-    remaining_existing: HashMap<i32, NoteReference>,
+    remaining_existing: HashMap<i64, NoteReference>,
 
     replacement_strategy: ReplacementStrategy,
     skip_empty: bool,
@@ -185,7 +186,7 @@ impl Exporter {
         };
 
         let vault = Vault::open(&cli.vault);
-        let existing = obsidian_rust_interface::joining::find_by::<_, i32>(
+        let existing = obsidian_rust_interface::joining::find_by::<_, i64>(
             &vault,
             &TypeAndKey {
                 type_key: "note-kind".to_string(),
@@ -346,7 +347,7 @@ impl Exporter {
         root: &PathBuf,
         book: &Book,
         existing_note: Option<&NoteReference>,
-    ) -> anyhow::Result<JoinedNote<i32, serde_yml::Value>> {
+    ) -> anyhow::Result<JoinedNote<i64, serde_yml::Value>> {
         debug!(
             "Starting export of book '{}' into '{:?}'",
             book.title, &root
@@ -424,7 +425,8 @@ impl Exporter {
     }
 
     fn sanitize_title(&self, title: &str) -> String {
-        self.sanitizer.replace_all(title, "")
+        self.sanitizer
+            .replace_all(title, "")
             .replace(":", "-")
             .replace(".", "-") // Logic for determining file extensions breaks if we have dots in the title
     }

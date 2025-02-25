@@ -1,7 +1,133 @@
+use crate::{Book, Document, Highlight, Library, Tag};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
-use crate::{Book, Document, Highlight, Library, Tag};
+
+mod types {
+    use chrono::{DateTime, Utc, NaiveDateTime};
+    use crate::{readwise, library};
+
+    #[derive(Debug, Clone)]
+    pub struct Document {
+        pub id: String,
+        pub url: String,
+        pub title: Option<String>,
+        pub author: Option<String>,
+        pub source: Option<String>,
+        pub category: Option<String>,
+        pub location: Option<String>,
+        pub site_name: Option<String>,
+        pub word_count: Option<i64>,
+        pub created_at: String,
+        pub updated_at: String,
+        pub published_date: Option<DateTime<Utc>>,
+        pub summary: Option<String>,
+        pub image_url: Option<String>,
+        pub content: Option<String>,
+        pub source_url: Option<String>,
+        pub notes: Option<String>,
+        pub parent_id: Option<String>,
+        pub reading_progress: f64,
+        pub first_opened_at: Option<String>,
+        pub last_opened_at: Option<String>,
+        pub saved_at: String,
+        pub last_moved_at: String,
+    }
+
+    impl Into<library::Document> for Document {
+        fn into(self) -> library::Document {
+            library::Document {
+                id: self.id,
+                url: self.url,
+                title: self.title,
+                author: self.author,
+                source: self.source,
+                category: self.category,
+                location: self.location,
+                site_name: self.site_name,
+                word_count: self.word_count,
+                created_at: self.created_at.parse().unwrap(),
+                updated_at: self.updated_at.parse().unwrap(),
+                published_date: self.published_date.map(|dt| dt.and_utc()),
+                summary: self.summary,
+                image_url: self.image_url,
+                content: self.content,
+                source_url: self.source_url,
+                notes: self.notes,
+                parent_id: self.parent_id,
+                reading_progress: self.reading_progress,
+                first_opened_at: self.first_opened_at.map(|dt| dt.parse().unwrap()),
+                last_opened_at: self.last_opened_at.map(|dt| dt.parse().unwrap()),
+                saved_at: self.saved_at.parse().unwrap(),
+                last_moved_at: self.last_moved_at.parse().unwrap(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Book {
+        pub id: i64,
+        pub title: String,
+        pub author: Option<String>,
+        pub category: String,
+        pub num_highlights: i64,
+        pub last_highlight_at: Option<NaiveDateTime>,
+        pub updated: Option<NaiveDateTime>,
+        pub cover_image_url: Option<String>,
+        pub highlights_url: Option<String>,
+        pub source_url: Option<String>,
+        pub asin: Option<String>,
+    }
+
+    impl Into<library::Book> for Book {
+        fn into(self) -> library::Book {
+            library::Book {
+                id: self.id,
+                title: self.title,
+                author: self.author,
+                category: self.category,
+                num_highlights: self.num_highlights,
+                last_highlight_at: self.last_highlight_at.map(|dt| dt.and_utc()),
+                updated: self.updated.map(|dt| dt.and_utc()),
+                cover_image_url: self.cover_image_url,
+                highlights_url: self.highlights_url,
+                source_url: self.source_url,
+                asin: self.asin,
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Highlight {
+        pub id: i64,
+        pub text: String,
+        pub note: String,
+        pub location: i64,
+        pub location_type: String,
+        pub highlighted_at: Option<NaiveDateTime>,
+        pub url: Option<String>,
+        pub color: String,
+        pub updated: Option<DateTime<Utc>>,
+        pub book_id: i64,
+    }
+
+    impl Into<library::Highlight> for Highlight {
+        fn into(self) -> library::Highlight {
+            library::Highlight {
+                id: self.id,
+                text: self.text,
+                note: self.note,
+                location: self.location,
+                location_type: self.location_type,
+                highlighted_at: self.highlighted_at,
+                url: self.url,
+                color: self.color,
+                updated: self.updated,
+                book_id: self.book_id,
+            }
+        }
+    }
+}
 
 pub struct Database {
     pool: SqlitePool,
@@ -12,12 +138,12 @@ impl Database {
         let pool = SqlitePool::connect(database_url)
             .await
             .context("Failed to connect to database")?;
-        
+
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
             .context("Failed to run migrations")?;
-        
+
         Ok(Self { pool })
     }
 
@@ -135,6 +261,11 @@ impl Database {
     }
 
     pub async fn insert_document(&self, document: &Document) -> anyhow::Result<()> {
+        let published_date = match &document.published_date {
+            Some(published_date) => Some(published_date.as_date_time()),
+            None => None,
+        };
+
         sqlx::query!(
             r#"
             INSERT INTO documents (
@@ -181,16 +312,7 @@ impl Database {
             document.word_count,
             document.created_at,
             document.updated_at,
-
-            // Handle PublishedDate enum
-            match &document.published_date {
-                Some(date) => match date {
-                    crate::readwise::PublishedDate::Integer(i) => i.to_string(),
-                    crate::readwise::PublishedDate::String(s) => s.clone(),
-                },
-                None => None,
-            },
-
+            published_date,
             document.summary,
             document.image_url,
             document.content,
@@ -209,7 +331,11 @@ impl Database {
         Ok(())
     }
 
-    async fn insert_tag<'a>(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, tag: &Tag) -> anyhow::Result<()> {
+    async fn insert_tag<'a>(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tag: &Tag,
+    ) -> anyhow::Result<()> {
         sqlx::query!(
             r#"
             INSERT INTO tags (id, name)
@@ -234,7 +360,7 @@ impl Database {
             ON CONFLICT(id) DO UPDATE SET
                 last_updated = excluded.last_updated
             "#,
-            updated_at.to_rfc3339(),
+            updated_at,
         )
         .execute(&self.pool)
         .await?;
@@ -252,65 +378,64 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        match result {
-            Some(row) => Ok(Some(DateTime::parse_from_rfc3339(&row.last_updated)?.with_timezone(&Utc))),
-            None => Ok(None),
-        }
+        Ok(result
+            .and_then(|record| record.last_updated)
+            .map(|last_updated| last_updated.and_utc()))
     }
 
     pub async fn export_to_library(&self) -> anyhow::Result<Library> {
-        let mut books = sqlx::query_as!(
-            Book,
-            r#"SELECT * FROM books"#
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut highlights = sqlx::query_as!(
-            Highlight,
-            r#"SELECT * FROM highlights"#
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let documents = sqlx::query_as!(
-            Document,
-            r#"SELECT * FROM documents"#
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        // Fetch tags for books
-        for book in &mut books {
-            let tags = sqlx::query_as!(
-                Tag,
-                r#"
-                SELECT t.* FROM tags t
-                JOIN book_tags bt ON bt.tag_id = t.id
-                WHERE bt.book_id = ?
-                "#,
-                book.id
-            )
+        let mut books = sqlx::query_as!(types::Book, r#"SELECT * FROM books"#)
             .fetch_all(&self.pool)
-            .await?;
-            book.tags = tags;
-        }
+            .await?
+            .iter()
+            .map(|book| book.into())
+            .collect();
 
-        // Fetch tags for highlights
-        for highlight in &mut highlights {
-            let tags = sqlx::query_as!(
-                Tag,
-                r#"
-                SELECT t.* FROM tags t
-                JOIN highlight_tags ht ON ht.tag_id = t.id
-                WHERE ht.highlight_id = ?
-                "#,
-                highlight.id
-            )
+        let mut highlights = sqlx::query_as!(types::Highlight, r#"SELECT * FROM highlights"#)
             .fetch_all(&self.pool)
-            .await?;
-            highlight.tags = tags;
-        }
+            .await?
+            .iter()
+            .map(|highlight| highlight.into())
+            .collect();
+
+        let documents = sqlx::query_as!(types::Document, r#"SELECT * FROM documents"#)
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(|document| document.into())
+            .collect();
+
+        // // Fetch tags for books
+        // for book in &mut books {
+        //     let tags = sqlx::query_as!(
+        //         Tag,
+        //         r#"
+        //         SELECT t.* FROM tags t
+        //         JOIN book_tags bt ON bt.tag_id = t.id
+        //         WHERE bt.book_id = ?
+        //         "#,
+        //         book.id
+        //     )
+        //     .fetch_all(&self.pool)
+        //     .await?;
+        //     book.tags = tags;
+        // }
+
+        // // Fetch tags for highlights
+        // for highlight in &mut highlights {
+        //     let tags = sqlx::query_as!(
+        //         Tag,
+        //         r#"
+        //         SELECT t.* FROM tags t
+        //         JOIN highlight_tags ht ON ht.tag_id = t.id
+        //         WHERE ht.highlight_id = ?
+        //         "#,
+        //         highlight.id
+        //     )
+        //     .fetch_all(&self.pool)
+        //     .await?;
+        //     highlight.tags = tags;
+        // }
 
         let last_updated = self.get_last_sync().await?.unwrap_or_else(Utc::now);
 

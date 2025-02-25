@@ -49,74 +49,74 @@
         "type_info": "Int64"
       },
       {
-        "name": "created_at",
+        "name": "summary",
         "ordinal": 9,
         "type_info": "Text"
       },
       {
-        "name": "updated_at",
+        "name": "image_url",
         "ordinal": 10,
         "type_info": "Text"
       },
       {
-        "name": "published_date",
+        "name": "content",
         "ordinal": 11,
         "type_info": "Text"
       },
       {
-        "name": "summary",
+        "name": "source_url",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "image_url",
+        "name": "notes",
         "ordinal": 13,
         "type_info": "Text"
       },
       {
-        "name": "content",
+        "name": "parent_id",
         "ordinal": 14,
         "type_info": "Text"
       },
       {
-        "name": "source_url",
-        "ordinal": 15,
-        "type_info": "Text"
-      },
-      {
-        "name": "notes",
-        "ordinal": 16,
-        "type_info": "Text"
-      },
-      {
-        "name": "parent_id",
-        "ordinal": 17,
-        "type_info": "Text"
-      },
-      {
         "name": "reading_progress",
-        "ordinal": 18,
+        "ordinal": 15,
         "type_info": "Float"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 16,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 17,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "published_date",
+        "ordinal": 18,
+        "type_info": "Datetime"
       },
       {
         "name": "first_opened_at",
         "ordinal": 19,
-        "type_info": "Text"
+        "type_info": "Datetime"
       },
       {
         "name": "last_opened_at",
         "ordinal": 20,
-        "type_info": "Text"
+        "type_info": "Datetime"
       },
       {
         "name": "saved_at",
         "ordinal": 21,
-        "type_info": "Text"
+        "type_info": "Datetime"
       },
       {
         "name": "last_moved_at",
         "ordinal": 22,
-        "type_info": "Text"
+        "type_info": "Datetime"
       }
     ],
     "parameters": {
@@ -132,9 +132,6 @@
       true,
       true,
       true,
-      false,
-      false,
-      true,
       true,
       true,
       true,
@@ -144,8 +141,11 @@
       false,
       true,
       true,
-      false,
-      false
+      true,
+      true,
+      true,
+      true,
+      true
     ]
   },
   "hash": "cf81ebc22c4d867def76879aa476dc21d0b361d72e2465facc6111df033de720"

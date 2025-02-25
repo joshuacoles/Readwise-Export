@@ -29,29 +29,29 @@
         "type_info": "Text"
       },
       {
-        "name": "highlighted_at",
+        "name": "url",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "url",
+        "name": "color",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "color",
+        "name": "book_id",
         "ordinal": 7,
-        "type_info": "Text"
+        "type_info": "Int64"
+      },
+      {
+        "name": "highlighted_at",
+        "ordinal": 8,
+        "type_info": "Datetime"
       },
       {
         "name": "updated",
-        "ordinal": 8,
-        "type_info": "Text"
-      },
-      {
-        "name": "book_id",
         "ordinal": 9,
-        "type_info": "Int64"
+        "type_info": "Datetime"
       }
     ],
     "parameters": {
@@ -64,10 +64,10 @@
       false,
       false,
       true,
+      false,
+      false,
       true,
-      false,
-      false,
-      false
+      true
     ]
   },
   "hash": "6d747917aea62ac2fed762aadf4d07c23dabf65813f71baabcb554c57066ad0a"

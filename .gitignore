@@ -4,3 +4,6 @@
 /vault
 /rv
 /.env
+
+*.db
+
