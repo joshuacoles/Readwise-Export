@@ -1,4 +1,5 @@
-use crate::readwise::{Book, Document, Highlight, Tag};
+use crate::readwise::{Book as ReadwiseBook, Document as ReadwiseDocument, Highlight as ReadwiseHighlight, Tag};
+use crate::library::{Book, Document, Highlight};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};

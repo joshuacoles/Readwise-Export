@@ -1,11 +1,13 @@
-use crate::{Book, Document, Highlight, Library, Tag};
+use crate::library::{Book, Document, Highlight};
+use crate::Library;
+use crate::readwise::Tag;
 use anyhow::Context;
-use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use sqlx::{SqlitePool, Row};
 
 mod types {
-    use chrono::{DateTime, Utc, NaiveDateTime};
-    use crate::{readwise, library};
+    use chrono::{DateTime, NaiveDateTime, Utc};
+    use crate::library;
 
     #[derive(Debug, Clone)]
     pub struct Document {
@@ -48,7 +50,7 @@ mod types {
                 word_count: self.word_count,
                 created_at: self.created_at.parse().unwrap(),
                 updated_at: self.updated_at.parse().unwrap(),
-                published_date: self.published_date.map(|dt| dt.and_utc()),
+                published_date: self.published_date,
                 summary: self.summary,
                 image_url: self.image_url,
                 content: self.content,
@@ -87,8 +89,8 @@ mod types {
                 author: self.author,
                 category: self.category,
                 num_highlights: self.num_highlights,
-                last_highlight_at: self.last_highlight_at.map(|dt| dt.and_utc()),
-                updated: self.updated.map(|dt| dt.and_utc()),
+                last_highlight_at: self.last_highlight_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+                updated: self.updated.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 cover_image_url: self.cover_image_url,
                 highlights_url: self.highlights_url,
                 source_url: self.source_url,
@@ -119,10 +121,10 @@ mod types {
                 note: self.note,
                 location: self.location,
                 location_type: self.location_type,
-                highlighted_at: self.highlighted_at,
+                highlighted_at: self.highlighted_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
                 url: self.url,
                 color: self.color,
-                updated: self.updated,
+                updated: self.updated.unwrap_or_else(|| Utc::now()),
                 book_id: self.book_id,
             }
         }
@@ -147,7 +149,7 @@ impl Database {
         Ok(Self { pool })
     }
 
-    pub async fn insert_book(&self, book: &Book) -> anyhow::Result<()> {
+    pub async fn insert_book(&self, book: &crate::readwise::Book) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query!(
@@ -205,7 +207,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn insert_highlight(&self, highlight: &Highlight) -> anyhow::Result<()> {
+    pub async fn insert_highlight(&self, highlight: &crate::readwise::Highlight) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query!(
@@ -260,7 +262,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn insert_document(&self, document: &Document) -> anyhow::Result<()> {
+    pub async fn insert_document(&self, document: &crate::readwise::Document) -> anyhow::Result<()> {
         let published_date = match &document.published_date {
             Some(published_date) => Some(published_date.as_date_time()),
             None => None,
@@ -384,58 +386,83 @@ impl Database {
     }
 
     pub async fn export_to_library(&self) -> anyhow::Result<Library> {
-        let mut books = sqlx::query_as!(types::Book, r#"SELECT * FROM books"#)
+        // Use raw queries to avoid type conversion issues
+        let rows = sqlx::query("SELECT * FROM books")
             .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(|book| book.into())
-            .collect();
+            .await?;
+            
+        let mut books = Vec::new();
+        for row in rows {
+            let book = types::Book {
+                id: row.get("id"),
+                title: row.get("title"),
+                author: row.get("author"),
+                category: row.get("category"),
+                num_highlights: row.get("num_highlights"),
+                last_highlight_at: row.get("last_highlight_at"),
+                updated: row.get("updated"),
+                cover_image_url: row.get("cover_image_url"),
+                highlights_url: row.get("highlights_url"),
+                source_url: row.get("source_url"),
+                asin: row.get("asin"),
+            };
+            books.push(book.into());
+        }
 
-        let mut highlights = sqlx::query_as!(types::Highlight, r#"SELECT * FROM highlights"#)
+        let rows = sqlx::query("SELECT * FROM highlights")
             .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(|highlight| highlight.into())
-            .collect();
+            .await?;
+            
+        let mut highlights = Vec::new();
+        for row in rows {
+            let highlight = types::Highlight {
+                id: row.get("id"),
+                text: row.get("text"),
+                note: row.get("note"),
+                location: row.get("location"),
+                location_type: row.get("location_type"),
+                highlighted_at: row.get("highlighted_at"),
+                url: row.get("url"),
+                color: row.get("color"),
+                updated: row.get("updated"),
+                book_id: row.get("book_id"),
+            };
+            highlights.push(highlight.into());
+        }
 
-        let documents = sqlx::query_as!(types::Document, r#"SELECT * FROM documents"#)
+        let rows = sqlx::query("SELECT * FROM documents")
             .fetch_all(&self.pool)
-            .await?
-            .iter()
-            .map(|document| document.into())
-            .collect();
-
-        // // Fetch tags for books
-        // for book in &mut books {
-        //     let tags = sqlx::query_as!(
-        //         Tag,
-        //         r#"
-        //         SELECT t.* FROM tags t
-        //         JOIN book_tags bt ON bt.tag_id = t.id
-        //         WHERE bt.book_id = ?
-        //         "#,
-        //         book.id
-        //     )
-        //     .fetch_all(&self.pool)
-        //     .await?;
-        //     book.tags = tags;
-        // }
-
-        // // Fetch tags for highlights
-        // for highlight in &mut highlights {
-        //     let tags = sqlx::query_as!(
-        //         Tag,
-        //         r#"
-        //         SELECT t.* FROM tags t
-        //         JOIN highlight_tags ht ON ht.tag_id = t.id
-        //         WHERE ht.highlight_id = ?
-        //         "#,
-        //         highlight.id
-        //     )
-        //     .fetch_all(&self.pool)
-        //     .await?;
-        //     highlight.tags = tags;
-        // }
+            .await?;
+            
+        let mut documents = Vec::new();
+        for row in rows {
+            let document = types::Document {
+                id: row.get("id"),
+                url: row.get("url"),
+                title: row.get("title"),
+                author: row.get("author"),
+                source: row.get("source"),
+                category: row.get("category"),
+                location: row.get("location"),
+                site_name: row.get("site_name"),
+                word_count: row.get("word_count"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                published_date: row.get("published_date"),
+                summary: row.get("summary"),
+                image_url: row.get("image_url"),
+                content: row.get("content"),
+                source_url: row.get("source_url"),
+                notes: row.get("notes"),
+                parent_id: row.get("parent_id"),
+                reading_progress: row.get("reading_progress"),
+                first_opened_at: row.get("first_opened_at"),
+                last_opened_at: row.get("last_opened_at"),
+                saved_at: row.get("saved_at"),
+                last_moved_at: row.get("last_moved_at"),
+            };
+            documents.push(document.into());
+        }
 
         let last_updated = self.get_last_sync().await?.unwrap_or_else(Utc::now);
 

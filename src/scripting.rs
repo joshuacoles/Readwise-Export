@@ -5,6 +5,7 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::path::Path;
 use tracing::debug;
+use crate::library;
 
 pub enum ScriptType {
     Rhai {
@@ -43,8 +44,8 @@ impl ScriptType {
 
     pub fn execute(
         &self,
-        book: &Book,
-        highlights: &[&Highlight],
+        book: &library::Book,
+        highlights: &[&library::Highlight],
     ) -> anyhow::Result<serde_yml::Value> {
         match self {
             ScriptType::Rhai {

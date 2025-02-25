@@ -80,23 +80,84 @@ impl Readwise {
     }
 
     pub async fn fetch_library(&self, kinds: &[ReadwiseObjectKind]) -> anyhow::Result<Library> {
-        Ok(Library {
-            books: if kinds.contains(&ReadwiseObjectKind::Book) {
-                self.fetch_books(None).await?
-            } else {
-                vec![]
-            },
-            highlights: if kinds.contains(&ReadwiseObjectKind::Highlight) {
-                self.fetch_highlights(None).await?
-            } else {
-                vec![]
-            },
+        let books = if kinds.contains(&ReadwiseObjectKind::Book) {
+            let readwise_books = self.fetch_books(None).await?;
+            readwise_books.into_iter()
+                .map(|book| crate::library::Book {
+                    id: book.id,
+                    title: book.title,
+                    author: book.author,
+                    category: book.category,
+                    num_highlights: book.num_highlights,
+                    last_highlight_at: book.last_highlight_at.as_deref().map(|s| s.parse().ok()).flatten(),
+                    updated: book.updated.as_deref().map(|s| s.parse().ok()).flatten(),
+                    cover_image_url: book.cover_image_url,
+                    highlights_url: book.highlights_url,
+                    source_url: book.source_url,
+                    asin: book.asin,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
 
-            documents: if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
-                self.fetch_document_list(None, None).await?
-            } else {
-                vec![]
-            },
+        let highlights = if kinds.contains(&ReadwiseObjectKind::Highlight) {
+            let readwise_highlights = self.fetch_highlights(None).await?;
+            readwise_highlights.into_iter()
+                .map(|highlight| crate::library::Highlight {
+                    id: highlight.id,
+                    text: highlight.text,
+                    note: highlight.note,
+                    location: highlight.location,
+                    location_type: highlight.location_type,
+                    highlighted_at: highlight.highlighted_at.as_deref().map(|s| s.parse().ok()).flatten(),
+                    url: highlight.url,
+                    color: highlight.color,
+                    updated: highlight.updated.parse().unwrap(),
+                    book_id: highlight.book_id,
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        let documents = if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
+            let readwise_documents = self.fetch_document_list(None, None).await?;
+            readwise_documents.into_iter()
+                .map(|document| crate::library::Document {
+                    id: document.id,
+                    url: document.url,
+                    title: document.title,
+                    author: document.author,
+                    source: document.source,
+                    category: document.category,
+                    location: document.location,
+                    site_name: document.site_name,
+                    word_count: document.word_count,
+                    created_at: document.created_at.parse().unwrap(),
+                    updated_at: document.updated_at.parse().unwrap(),
+                    published_date: document.published_date.map(|pd| pd.as_date_time()),
+                    summary: document.summary,
+                    image_url: document.image_url,
+                    content: document.content,
+                    source_url: document.source_url,
+                    notes: document.notes,
+                    parent_id: document.parent_id,
+                    reading_progress: document.reading_progress,
+                    first_opened_at: document.first_opened_at.map(|s| s.parse().unwrap()),
+                    last_opened_at: document.last_opened_at.map(|s| s.parse().unwrap()),
+                    saved_at: document.saved_at.parse().unwrap(),
+                    last_moved_at: document.last_moved_at.parse().unwrap(),
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        Ok(Library {
+            books,
+            highlights,
+            documents,
             updated_at: Utc::now(),
         })
     }
@@ -109,21 +170,74 @@ impl Readwise {
         let last_updated = library.updated_at;
 
         if kinds.contains(&ReadwiseObjectKind::Book) {
-            library
-                .books
-                .extend(self.fetch_books(Some(last_updated)).await?);
+            let readwise_books = self.fetch_books(Some(last_updated)).await?;
+            let library_books: Vec<crate::library::Book> = readwise_books.into_iter()
+                .map(|book| crate::library::Book {
+                    id: book.id,
+                    title: book.title,
+                    author: book.author,
+                    category: book.category,
+                    num_highlights: book.num_highlights,
+                    last_highlight_at: book.last_highlight_at.as_deref().map(|s| s.parse().ok()).flatten(),
+                    updated: book.updated.as_deref().map(|s| s.parse().ok()).flatten(),
+                    cover_image_url: book.cover_image_url,
+                    highlights_url: book.highlights_url,
+                    source_url: book.source_url,
+                    asin: book.asin,
+                })
+                .collect();
+            library.books.extend(library_books);
         }
 
         if kinds.contains(&ReadwiseObjectKind::Highlight) {
-            library
-                .highlights
-                .extend(self.fetch_highlights(Some(last_updated)).await?);
+            let readwise_highlights = self.fetch_highlights(Some(last_updated)).await?;
+            let library_highlights: Vec<crate::library::Highlight> = readwise_highlights.into_iter()
+                .map(|highlight| crate::library::Highlight {
+                    id: highlight.id,
+                    text: highlight.text,
+                    note: highlight.note,
+                    location: highlight.location,
+                    location_type: highlight.location_type,
+                    highlighted_at: highlight.highlighted_at.as_deref().map(|s| s.parse().ok()).flatten(),
+                    url: highlight.url,
+                    color: highlight.color,
+                    updated: highlight.updated.parse().unwrap(),
+                    book_id: highlight.book_id,
+                })
+                .collect();
+            library.highlights.extend(library_highlights);
         }
 
         if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
-            library
-                .documents
-                .extend(self.fetch_document_list(Some(last_updated), None).await?);
+            let readwise_documents = self.fetch_document_list(Some(last_updated), None).await?;
+            let library_documents: Vec<crate::library::Document> = readwise_documents.into_iter()
+                .map(|document| crate::library::Document {
+                    id: document.id,
+                    url: document.url,
+                    title: document.title,
+                    author: document.author,
+                    source: document.source,
+                    category: document.category,
+                    location: document.location,
+                    site_name: document.site_name,
+                    word_count: document.word_count,
+                    created_at: document.created_at.parse().unwrap(),
+                    updated_at: document.updated_at.parse().unwrap(),
+                    published_date: document.published_date.map(|pd| pd.as_date_time()),
+                    summary: document.summary,
+                    image_url: document.image_url,
+                    content: document.content,
+                    source_url: document.source_url,
+                    notes: document.notes,
+                    parent_id: document.parent_id,
+                    reading_progress: document.reading_progress,
+                    first_opened_at: document.first_opened_at.map(|s| s.parse().unwrap()),
+                    last_opened_at: document.last_opened_at.map(|s| s.parse().unwrap()),
+                    saved_at: document.saved_at.parse().unwrap(),
+                    last_moved_at: document.last_moved_at.parse().unwrap(),
+                })
+                .collect();
+            library.documents.extend(library_documents);
         }
 
         library.updated_at = Utc::now();
