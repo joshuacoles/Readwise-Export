@@ -149,16 +149,70 @@ impl Database {
     }
 
     pub async fn insert_book(&self, book: &crate::readwise::Book) -> anyhow::Result<()> {
+        self.insert_books(&[book]).await
+    }
+
+    pub async fn insert_books(&self, books: &[&crate::readwise::Book]) -> anyhow::Result<()> {
+        if books.is_empty() {
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO books (
+        // Collect all unique tags first
+        let mut all_tags = std::collections::HashMap::new();
+        for book in books {
+            for tag in &book.tags {
+                all_tags.insert(tag.id, tag);
+            }
+        }
+
+        // Batch insert tags if any exist
+        if !all_tags.is_empty() {
+            for tag in all_tags.values() {
+                self.insert_tag(&mut tx, tag).await?;
+            }
+        }
+
+        // Batch insert books using multiple value tuples
+        let mut book_ids = Vec::new();
+        let mut book_titles = Vec::new();
+        let mut book_authors = Vec::new();
+        let mut book_categories = Vec::new();
+        let mut book_num_highlights = Vec::new();
+        let mut book_last_highlight_ats = Vec::new();
+        let mut book_updateds = Vec::new();
+        let mut book_cover_image_urls = Vec::new();
+        let mut book_highlights_urls = Vec::new();
+        let mut book_source_urls = Vec::new();
+        let mut book_asins = Vec::new();
+
+        for book in books {
+            book_ids.push(book.id);
+            book_titles.push(&book.title);
+            book_authors.push(book.author.as_deref());
+            book_categories.push(&book.category);
+            book_num_highlights.push(book.num_highlights);
+            book_last_highlight_ats.push(book.last_highlight_at.as_deref());
+            book_updateds.push(book.updated.as_deref());
+            book_cover_image_urls.push(book.cover_image_url.as_deref());
+            book_highlights_urls.push(book.highlights_url.as_deref());
+            book_source_urls.push(book.source_url.as_deref());
+            book_asins.push(book.asin.as_deref());
+        }
+
+        // Build a query with multiple VALUES clauses
+        let placeholders: Vec<String> = (0..books.len())
+            .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
+            .collect();
+        
+        let book_query = format!(
+            "INSERT INTO books (
                 id, title, author, category, num_highlights,
                 last_highlight_at, updated, cover_image_url,
                 highlights_url, source_url, asin
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES {}
             ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 author = excluded.author,
@@ -169,37 +223,50 @@ impl Database {
                 cover_image_url = excluded.cover_image_url,
                 highlights_url = excluded.highlights_url,
                 source_url = excluded.source_url,
-                asin = excluded.asin
-            "#,
-            book.id,
-            book.title,
-            book.author,
-            book.category,
-            book.num_highlights,
-            book.last_highlight_at,
-            book.updated,
-            book.cover_image_url,
-            book.highlights_url,
-            book.source_url,
-            book.asin,
-        )
-        .execute(&mut *tx)
-        .await?;
+                asin = excluded.asin",
+            placeholders.join(", ")
+        );
 
-        // Handle tags
-        for tag in &book.tags {
-            self.insert_tag(&mut tx, tag).await?;
-            sqlx::query!(
-                r#"
-                INSERT INTO book_tags (book_id, tag_id)
-                VALUES (?, ?)
-                ON CONFLICT DO NOTHING
-                "#,
-                book.id,
-                tag.id,
-            )
-            .execute(&mut *tx)
-            .await?;
+        let mut query = sqlx::query(&book_query);
+        for i in 0..books.len() {
+            query = query
+                .bind(book_ids[i])
+                .bind(book_titles[i])
+                .bind(book_authors[i])
+                .bind(book_categories[i])
+                .bind(book_num_highlights[i])
+                .bind(book_last_highlight_ats[i])
+                .bind(book_updateds[i])
+                .bind(book_cover_image_urls[i])
+                .bind(book_highlights_urls[i])
+                .bind(book_source_urls[i])
+                .bind(book_asins[i]);
+        }
+        query.execute(&mut *tx).await?;
+
+        // Batch insert book_tags relationships
+        let mut book_tag_pairs = Vec::new();
+        for book in books {
+            for tag in &book.tags {
+                book_tag_pairs.push((book.id, tag.id));
+            }
+        }
+
+        if !book_tag_pairs.is_empty() {
+            let placeholders: Vec<String> = (0..book_tag_pairs.len())
+                .map(|_| "(?, ?)".to_string())
+                .collect();
+                
+            let book_tag_query = format!(
+                "INSERT INTO book_tags (book_id, tag_id) VALUES {} ON CONFLICT DO NOTHING",
+                placeholders.join(", ")
+            );
+            
+            let mut query = sqlx::query(&book_tag_query);
+            for (book_id, tag_id) in &book_tag_pairs {
+                query = query.bind(*book_id).bind(*tag_id);
+            }
+            query.execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -207,15 +274,67 @@ impl Database {
     }
 
     pub async fn insert_highlight(&self, highlight: &crate::readwise::Highlight) -> anyhow::Result<()> {
+        self.insert_highlights(&[highlight]).await
+    }
+
+    pub async fn insert_highlights(&self, highlights: &[&crate::readwise::Highlight]) -> anyhow::Result<()> {
+        if highlights.is_empty() {
+            return Ok(());
+        }
+
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query!(
-            r#"
-            INSERT INTO highlights (
+        // Collect all unique tags first
+        let mut all_tags = std::collections::HashMap::new();
+        for highlight in highlights {
+            for tag in &highlight.tags {
+                all_tags.insert(tag.id, tag);
+            }
+        }
+
+        // Batch insert tags if any exist
+        if !all_tags.is_empty() {
+            for tag in all_tags.values() {
+                self.insert_tag(&mut tx, tag).await?;
+            }
+        }
+
+        // Batch insert highlights using multiple value tuples
+        let mut highlight_ids = Vec::new();
+        let mut highlight_texts = Vec::new();
+        let mut highlight_notes = Vec::new();
+        let mut highlight_locations = Vec::new();
+        let mut highlight_location_types = Vec::new();
+        let mut highlight_highlighted_ats = Vec::new();
+        let mut highlight_urls = Vec::new();
+        let mut highlight_colors = Vec::new();
+        let mut highlight_updateds = Vec::new();
+        let mut highlight_book_ids = Vec::new();
+
+        for highlight in highlights {
+            highlight_ids.push(highlight.id);
+            highlight_texts.push(&highlight.text);
+            highlight_notes.push(&highlight.note);
+            highlight_locations.push(highlight.location);
+            highlight_location_types.push(&highlight.location_type);
+            highlight_highlighted_ats.push(highlight.highlighted_at.as_deref());
+            highlight_urls.push(highlight.url.as_deref());
+            highlight_colors.push(&highlight.color);
+            highlight_updateds.push(&highlight.updated);
+            highlight_book_ids.push(highlight.book_id);
+        }
+
+        // Build a query with multiple VALUES clauses
+        let placeholders: Vec<String> = (0..highlights.len())
+            .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
+            .collect();
+        
+        let highlight_query = format!(
+            "INSERT INTO highlights (
                 id, text, note, location, location_type,
                 highlighted_at, url, color, updated, book_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES {}
             ON CONFLICT(id) DO UPDATE SET
                 text = excluded.text,
                 note = excluded.note,
@@ -225,36 +344,49 @@ impl Database {
                 url = excluded.url,
                 color = excluded.color,
                 updated = excluded.updated,
-                book_id = excluded.book_id
-            "#,
-            highlight.id,
-            highlight.text,
-            highlight.note,
-            highlight.location,
-            highlight.location_type,
-            highlight.highlighted_at,
-            highlight.url,
-            highlight.color,
-            highlight.updated,
-            highlight.book_id,
-        )
-        .execute(&mut *tx)
-        .await?;
+                book_id = excluded.book_id",
+            placeholders.join(", ")
+        );
 
-        // Handle tags
-        for tag in &highlight.tags {
-            self.insert_tag(&mut tx, tag).await?;
-            sqlx::query!(
-                r#"
-                INSERT INTO highlight_tags (highlight_id, tag_id)
-                VALUES (?, ?)
-                ON CONFLICT DO NOTHING
-                "#,
-                highlight.id,
-                tag.id,
-            )
-            .execute(&mut *tx)
-            .await?;
+        let mut query = sqlx::query(&highlight_query);
+        for i in 0..highlights.len() {
+            query = query
+                .bind(highlight_ids[i])
+                .bind(highlight_texts[i])
+                .bind(highlight_notes[i])
+                .bind(highlight_locations[i])
+                .bind(highlight_location_types[i])
+                .bind(highlight_highlighted_ats[i])
+                .bind(highlight_urls[i])
+                .bind(highlight_colors[i])
+                .bind(highlight_updateds[i])
+                .bind(highlight_book_ids[i]);
+        }
+        query.execute(&mut *tx).await?;
+
+        // Batch insert highlight_tags relationships
+        let mut highlight_tag_pairs = Vec::new();
+        for highlight in highlights {
+            for tag in &highlight.tags {
+                highlight_tag_pairs.push((highlight.id, tag.id));
+            }
+        }
+
+        if !highlight_tag_pairs.is_empty() {
+            let placeholders: Vec<String> = (0..highlight_tag_pairs.len())
+                .map(|_| "(?, ?)".to_string())
+                .collect();
+                
+            let highlight_tag_query = format!(
+                "INSERT INTO highlight_tags (highlight_id, tag_id) VALUES {} ON CONFLICT DO NOTHING",
+                placeholders.join(", ")
+            );
+            
+            let mut query = sqlx::query(&highlight_tag_query);
+            for (highlight_id, tag_id) in &highlight_tag_pairs {
+                query = query.bind(*highlight_id).bind(*tag_id);
+            }
+            query.execute(&mut *tx).await?;
         }
 
         tx.commit().await?;
@@ -262,14 +394,77 @@ impl Database {
     }
 
     pub async fn insert_document(&self, document: &crate::readwise::Document) -> anyhow::Result<()> {
-        let published_date = match &document.published_date {
-            Some(published_date) => Some(published_date.as_date_time()),
-            None => None,
-        };
+        self.insert_documents(&[document]).await
+    }
 
-        sqlx::query!(
-            r#"
-            INSERT INTO documents (
+    pub async fn insert_documents(&self, documents: &[&crate::readwise::Document]) -> anyhow::Result<()> {
+        if documents.is_empty() {
+            return Ok(());
+        }
+
+        // Batch insert documents using multiple value tuples
+        let mut document_ids = Vec::new();
+        let mut document_urls = Vec::new();
+        let mut document_titles = Vec::new();
+        let mut document_authors = Vec::new();
+        let mut document_sources = Vec::new();
+        let mut document_categories = Vec::new();
+        let mut document_locations = Vec::new();
+        let mut document_site_names = Vec::new();
+        let mut document_word_counts = Vec::new();
+        let mut document_created_ats = Vec::new();
+        let mut document_updated_ats = Vec::new();
+        let mut document_published_dates = Vec::new();
+        let mut document_summaries = Vec::new();
+        let mut document_image_urls = Vec::new();
+        let mut document_contents = Vec::new();
+        let mut document_source_urls = Vec::new();
+        let mut document_notes = Vec::new();
+        let mut document_parent_ids = Vec::new();
+        let mut document_reading_progresses = Vec::new();
+        let mut document_first_opened_ats = Vec::new();
+        let mut document_last_opened_ats = Vec::new();
+        let mut document_saved_ats = Vec::new();
+        let mut document_last_moved_ats = Vec::new();
+
+        for document in documents {
+            let published_date = match &document.published_date {
+                Some(published_date) => Some(published_date.as_date_time()),
+                None => None,
+            };
+
+            document_ids.push(&document.id);
+            document_urls.push(&document.url);
+            document_titles.push(document.title.as_deref());
+            document_authors.push(document.author.as_deref());
+            document_sources.push(document.source.as_deref());
+            document_categories.push(document.category.as_deref());
+            document_locations.push(document.location.as_deref());
+            document_site_names.push(document.site_name.as_deref());
+            document_word_counts.push(document.word_count);
+            document_created_ats.push(&document.created_at);
+            document_updated_ats.push(&document.updated_at);
+            document_published_dates.push(published_date);
+            document_summaries.push(document.summary.as_deref());
+            document_image_urls.push(document.image_url.as_deref());
+            document_contents.push(document.content.as_deref());
+            document_source_urls.push(document.source_url.as_deref());
+            document_notes.push(document.notes.as_deref());
+            document_parent_ids.push(document.parent_id.as_deref());
+            document_reading_progresses.push(document.reading_progress);
+            document_first_opened_ats.push(document.first_opened_at.as_deref());
+            document_last_opened_ats.push(document.last_opened_at.as_deref());
+            document_saved_ats.push(&document.saved_at);
+            document_last_moved_ats.push(&document.last_moved_at);
+        }
+
+        // Build a query with multiple VALUES clauses
+        let placeholders: Vec<String> = (0..documents.len())
+            .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string())
+            .collect();
+        
+        let document_query = format!(
+            "INSERT INTO documents (
                 id, url, title, author, source, category,
                 location, site_name, word_count, created_at,
                 updated_at, published_date, summary, image_url,
@@ -277,7 +472,7 @@ impl Database {
                 reading_progress, first_opened_at, last_opened_at,
                 saved_at, last_moved_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES {}
             ON CONFLICT(id) DO UPDATE SET
                 url = excluded.url,
                 title = excluded.title,
@@ -300,34 +495,38 @@ impl Database {
                 first_opened_at = excluded.first_opened_at,
                 last_opened_at = excluded.last_opened_at,
                 saved_at = excluded.saved_at,
-                last_moved_at = excluded.last_moved_at
-            "#,
-            document.id,
-            document.url,
-            document.title,
-            document.author,
-            document.source,
-            document.category,
-            document.location,
-            document.site_name,
-            document.word_count,
-            document.created_at,
-            document.updated_at,
-            published_date,
-            document.summary,
-            document.image_url,
-            document.content,
-            document.source_url,
-            document.notes,
-            document.parent_id,
-            document.reading_progress,
-            document.first_opened_at,
-            document.last_opened_at,
-            document.saved_at,
-            document.last_moved_at,
-        )
-        .execute(&self.pool)
-        .await?;
+                last_moved_at = excluded.last_moved_at",
+            placeholders.join(", ")
+        );
+
+        let mut query = sqlx::query(&document_query);
+        for i in 0..documents.len() {
+            query = query
+                .bind(document_ids[i])
+                .bind(document_urls[i])
+                .bind(document_titles[i])
+                .bind(document_authors[i])
+                .bind(document_sources[i])
+                .bind(document_categories[i])
+                .bind(document_locations[i])
+                .bind(document_site_names[i])
+                .bind(document_word_counts[i])
+                .bind(document_created_ats[i])
+                .bind(document_updated_ats[i])
+                .bind(document_published_dates[i])
+                .bind(document_summaries[i])
+                .bind(document_image_urls[i])
+                .bind(document_contents[i])
+                .bind(document_source_urls[i])
+                .bind(document_notes[i])
+                .bind(document_parent_ids[i])
+                .bind(document_reading_progresses[i])
+                .bind(document_first_opened_ats[i])
+                .bind(document_last_opened_ats[i])
+                .bind(document_saved_ats[i])
+                .bind(document_last_moved_ats[i]);
+        }
+        query.execute(&self.pool).await?;
 
         Ok(())
     }

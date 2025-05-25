@@ -489,23 +489,20 @@ async fn main() -> Result<(), anyhow::Error> {
 
             if kinds.contains(&ReadwiseObjectKind::Book) {
                 let books = readwise.fetch_books(last_sync).await?;
-                for book in books {
-                    db.insert_book(&book).await?;
-                }
+                let book_refs: Vec<&_> = books.iter().collect();
+                db.insert_books(&book_refs).await?;
             }
 
             if kinds.contains(&ReadwiseObjectKind::Highlight) {
                 let highlights = readwise.fetch_highlights(last_sync).await?;
-                for highlight in highlights {
-                    db.insert_highlight(&highlight).await?;
-                }
+                let highlight_refs: Vec<&_> = highlights.iter().collect();
+                db.insert_highlights(&highlight_refs).await?;
             }
 
             if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
                 let documents = readwise.fetch_document_list(last_sync, None).await?;
-                for document in documents {
-                    db.insert_document(&document).await?;
-                }
+                let document_refs: Vec<&_> = documents.iter().collect();
+                db.insert_documents(&document_refs).await?;
             }
 
             db.update_sync_state(Utc::now()).await?;
