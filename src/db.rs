@@ -3,6 +3,7 @@ use crate::readwise::Tag;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::{SqlitePool, Row};
+use sqlx::sqlite::{SqliteConnectOptions};
 
 mod types {
     use chrono::{DateTime, NaiveDateTime, Utc};
@@ -135,10 +136,12 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn new(database_url: &str) -> anyhow::Result<Self> {
-        let pool = SqlitePool::connect(database_url)
-            .await
-            .context("Failed to connect to database")?;
+    pub async fn new(database_path: &str) -> anyhow::Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(database_path)
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options).await?;
 
         sqlx::migrate!("./migrations")
             .run(&pool)
