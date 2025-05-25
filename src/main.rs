@@ -465,7 +465,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     match &cli.command {
         Commands::Fetch(fetch_cmd) => {
-            let kinds = if fetch_cmd.kind.is_empty() {
+            let kinds_to_fetch = if fetch_cmd.kind.is_empty() {
                 vec![
                     ReadwiseObjectKind::ReaderDocument,
                     ReadwiseObjectKind::Book,
@@ -475,64 +475,72 @@ async fn main() -> Result<(), anyhow::Error> {
                 fetch_cmd.kind.clone()
             };
 
-            let last_sync = match fetch_cmd.strategy {
-                FetchStrategy::Update => db.get_last_sync().await?,
-                FetchStrategy::Refetch => None,
-            };
-
-            if let Some(last_sync) = last_sync {
-                info!("Fetching updates since {}", last_sync);
-            } else {
-                info!("Fetching whole library from readwise");
-            }
-
             let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
 
-            if kinds.contains(&ReadwiseObjectKind::Book) {
-                info!("Starting to stream books from Readwise API");
-                let mut book_stream = readwise.fetch_books_stream(last_sync);
-                
-                while let Some(chunk_result) = book_stream.next().await {
-                    match chunk_result {
-                        Ok(books_chunk) => {
-                            if !books_chunk.is_empty() {
-                                info!("Processing {} books in current chunk", books_chunk.len());
-                                let book_refs: Vec<&_> = books_chunk.iter().collect();
-                                db.insert_books(&book_refs).await?;
+            for kind in kinds_to_fetch {
+                let last_sync = match fetch_cmd.strategy {
+                    FetchStrategy::Update => db.get_last_sync(kind).await?,
+                    FetchStrategy::Refetch => None,
+                };
+
+                if let Some(last_sync_time) = last_sync {
+                    info!("Fetching {:?} updates since {}", kind, last_sync_time);
+                } else {
+                    info!("Fetching all {:?} from readwise", kind);
+                }
+
+                match kind {
+                    ReadwiseObjectKind::Book => {
+                        info!("Starting to stream books from Readwise API");
+                        let mut book_stream = readwise.fetch_books_stream(last_sync);
+                        
+                        while let Some(chunk_result) = book_stream.next().await {
+                            match chunk_result {
+                                Ok(books_chunk) => {
+                                    if !books_chunk.is_empty() {
+                                        info!("Processing {} books in current chunk", books_chunk.len());
+                                        let book_refs: Vec<&_> = books_chunk.iter().collect();
+                                        db.insert_books(&book_refs).await?;
+                                    }
+                                }
+                                Err(e) => return Err(anyhow!("Failed to fetch books chunk: {}", e)),
                             }
                         }
-                        Err(e) => return Err(anyhow!("Failed to fetch books chunk: {}", e)),
+                        db.update_sync_state(ReadwiseObjectKind::Book, Utc::now()).await?;
+                        info!("Finished processing all book chunks");
                     }
-                }
-                info!("Finished processing all book chunks");
-            }
-
-            if kinds.contains(&ReadwiseObjectKind::Highlight) {
-                info!("Starting to stream highlights from Readwise API");
-                let mut highlight_stream = readwise.fetch_highlights_stream(last_sync);
-                
-                while let Some(chunk_result) = highlight_stream.next().await {
-                    match chunk_result {
-                        Ok(highlights_chunk) => {
-                            if !highlights_chunk.is_empty() {
-                                info!("Processing {} highlights in current chunk", highlights_chunk.len());
-                                let highlight_refs: Vec<&_> = highlights_chunk.iter().collect();
-                                db.insert_highlights(&highlight_refs).await?;
+                    ReadwiseObjectKind::Highlight => {
+                        info!("Starting to stream highlights from Readwise API");
+                        let mut highlight_stream = readwise.fetch_highlights_stream(last_sync);
+                        
+                        while let Some(chunk_result) = highlight_stream.next().await {
+                            match chunk_result {
+                                Ok(highlights_chunk) => {
+                                    if !highlights_chunk.is_empty() {
+                                        info!("Processing {} highlights in current chunk", highlights_chunk.len());
+                                        let highlight_refs: Vec<&_> = highlights_chunk.iter().collect();
+                                        db.insert_highlights(&highlight_refs).await?;
+                                    }
+                                }
+                                Err(e) => return Err(anyhow!("Failed to fetch highlights chunk: {}", e)),
                             }
                         }
-                        Err(e) => return Err(anyhow!("Failed to fetch highlights chunk: {}", e)),
+                        db.update_sync_state(ReadwiseObjectKind::Highlight, Utc::now()).await?;
+                        info!("Finished processing all highlight chunks");
+                    }
+                    ReadwiseObjectKind::ReaderDocument => {
+                        info!("Fetching reader documents from Readwise API");
+                        let documents = readwise.fetch_document_list(last_sync, None).await?;
+                        if !documents.is_empty() {
+                            info!("Processing {} documents", documents.len());
+                            let document_refs: Vec<&_> = documents.iter().collect();
+                            db.insert_documents(&document_refs).await?;
+                        }
+                        db.update_sync_state(ReadwiseObjectKind::ReaderDocument, Utc::now()).await?;
+                        info!("Finished processing reader documents");
                     }
                 }
-                info!("Finished processing all highlight chunks");
             }
-
-            if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
-                let documents = readwise.fetch_document_list(last_sync, None).await?;
-                let document_refs: Vec<&_> = documents.iter().collect();
-                db.insert_documents(&document_refs).await?;
-            }
-
-            db.update_sync_state(Utc::now()).await?;
 
             // If legacy library file is specified, export to JSON for compatibility
             if let Some(library_path) = &cli.library {

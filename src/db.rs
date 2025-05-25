@@ -1,5 +1,6 @@
 use crate::Library;
 use crate::readwise::Tag;
+use crate::ReadwiseObjectKind;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use sqlx::{SqlitePool, Row};
@@ -555,35 +556,68 @@ impl Database {
         Ok(())
     }
 
-    pub async fn update_sync_state(&self, updated_at: DateTime<Utc>) -> anyhow::Result<()> {
-        sqlx::query!(
-            r#"
-            INSERT INTO sync_state (id, last_updated)
-            VALUES (1, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                last_updated = excluded.last_updated
-            "#,
-            updated_at,
-        )
-        .execute(&self.pool)
-        .await?;
+    pub async fn update_sync_state(&self, kind: ReadwiseObjectKind, updated_at: DateTime<Utc>) -> anyhow::Result<()> {
+        match kind {
+            ReadwiseObjectKind::Book => {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO sync_state (id, last_books_sync)
+                    VALUES (1, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        last_books_sync = excluded.last_books_sync
+                    "#,
+                    updated_at,
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+            ReadwiseObjectKind::Highlight => {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO sync_state (id, last_highlights_sync)
+                    VALUES (1, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        last_highlights_sync = excluded.last_highlights_sync
+                    "#,
+                    updated_at,
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+            ReadwiseObjectKind::ReaderDocument => {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO sync_state (id, last_documents_sync)
+                    VALUES (1, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        last_documents_sync = excluded.last_documents_sync
+                    "#,
+                    updated_at,
+                )
+                .execute(&self.pool)
+                .await?;
+            }
+        }
 
         Ok(())
     }
 
-    pub async fn get_last_sync(&self) -> anyhow::Result<Option<DateTime<Utc>>> {
-        let result = sqlx::query!(
+    pub async fn get_last_sync(&self, kind: ReadwiseObjectKind) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query!(
             r#"
-            SELECT last_updated FROM sync_state
+            SELECT last_books_sync, last_highlights_sync, last_documents_sync
+            FROM sync_state
             WHERE id = 1
             "#,
         )
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(result
-            .and_then(|record| record.last_updated)
-            .map(|last_updated| last_updated.and_utc()))
+        Ok(row.and_then(|record| match kind {
+            ReadwiseObjectKind::Book => record.last_books_sync.map(|dt| dt.and_utc()),
+            ReadwiseObjectKind::Highlight => record.last_highlights_sync.map(|dt| dt.and_utc()),
+            ReadwiseObjectKind::ReaderDocument => record.last_documents_sync.map(|dt| dt.and_utc()),
+        }))
     }
 
     pub async fn export_to_library(&self) -> anyhow::Result<Library> {
@@ -665,13 +699,20 @@ impl Database {
             documents.push(document.into());
         }
 
-        let last_updated = self.get_last_sync().await?.unwrap_or_else(Utc::now);
+        let books_sync = self.get_last_sync(ReadwiseObjectKind::Book).await?.unwrap_or_else(Utc::now);
+        let highlights_sync = self.get_last_sync(ReadwiseObjectKind::Highlight).await?.unwrap_or_else(Utc::now);
+        let documents_sync = self.get_last_sync(ReadwiseObjectKind::ReaderDocument).await?.unwrap_or_else(Utc::now);
+
+        let overall_last_updated = vec![books_sync, highlights_sync, documents_sync]
+            .into_iter()
+            .max()
+            .unwrap_or_else(Utc::now);
 
         Ok(Library {
             books,
             highlights,
             documents,
-            updated_at: last_updated,
+            updated_at: overall_last_updated,
         })
     }
 }
