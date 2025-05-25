@@ -3,6 +3,8 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::{StatusCode, Url};
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
+use futures::stream::Stream;
+use std::pin::Pin;
 
 pub struct Readwise {
     token: String,
@@ -193,6 +195,13 @@ impl Readwise {
         self.fetch_paged(Resource::Books, last_updated).await
     }
 
+    pub fn fetch_books_stream(
+        &self,
+        last_updated: Option<DateTime<Utc>>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<Book>, anyhow::Error>> + Send + '_>> {
+        self.fetch_paged_stream(Resource::Books, last_updated)
+    }
+
     pub async fn fetch_highlights(
         &self,
         last_updated: Option<DateTime<Utc>>,
@@ -200,27 +209,38 @@ impl Readwise {
         self.fetch_paged(Resource::Highlights, last_updated).await
     }
 
-    pub(crate) async fn fetch_paged<T: DeserializeOwned>(
+    pub fn fetch_highlights_stream(
+        &self,
+        last_updated: Option<DateTime<Utc>>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<Highlight>, anyhow::Error>> + Send + '_>> {
+        self.fetch_paged_stream(Resource::Highlights, last_updated)
+    }
+
+    pub(crate) fn fetch_paged_stream<T: DeserializeOwned + Send + 'static>(
         &self,
         resource: Resource,
         last_updated: Option<DateTime<Utc>>,
-    ) -> Result<Vec<T>, anyhow::Error> {
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<T>, anyhow::Error>> + Send + '_>> {
+        let token = self.token.clone();
+        let api_endpoint = self.api_endpoint.clone();
+        let api_page_size = self.api_page_size;
+
         info!(
-            "Fetching {} from Readwise, since {}",
+            "Starting streaming fetch of {} from Readwise, since {}",
             resource,
             last_updated
                 .map(|v| v.to_rfc3339())
                 .unwrap_or("[all]".to_string())
         );
 
-        let mut url = self.api_endpoint.clone();
+        let mut url = api_endpoint;
         url.path_segments_mut().unwrap().push(match resource {
             Resource::Books => "books",
             Resource::Highlights => "highlights",
         });
 
         url.query_pairs_mut()
-            .append_pair("page_size", &self.api_page_size.to_string());
+            .append_pair("page_size", &api_page_size.to_string());
 
         if let Some(last_updated) = last_updated {
             url.query_pairs_mut()
@@ -229,51 +249,102 @@ impl Readwise {
 
         debug!("Readwise api url: {}", url);
 
-        let mut entities = vec![];
-        let mut next_url = url.clone();
+        let stream = async_stream::stream! {
+            let mut next_url = Some(url);
 
-        loop {
-            let response = reqwest::Client::new()
-                .get(next_url.clone())
-                .header(AUTHORIZATION, format!("Token {}", self.token))
-                .send()
-                .await?;
+            while let Some(current_url) = next_url {
+                loop {
+                    let response = match reqwest::Client::new()
+                        .get(current_url.clone())
+                        .header(AUTHORIZATION, format!("Token {}", token))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("Request failed: {}", e));
+                            return;
+                        }
+                    };
 
-            if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                let retry_delay = response
-                    .headers()
-                    .get("Retry-After")
-                    .map(|v| v.to_str().unwrap())
-                    .map(|v| v.parse::<u64>().unwrap())
-                    .unwrap_or(5);
+                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                        let retry_delay = response
+                            .headers()
+                            .get("Retry-After")
+                            .map(|v| v.to_str().unwrap_or("5"))
+                            .map(|v| v.parse::<u64>().unwrap_or(5))
+                            .unwrap_or(5);
 
-                debug!("Rate limited, retrying in {} seconds", retry_delay);
+                        debug!("Rate limited, retrying in {} seconds", retry_delay);
+                        tokio::time::sleep(Duration::from_secs(retry_delay)).await;
+                        continue;
+                    } else if !response.status().is_success() {
+                        yield Err(anyhow::anyhow!("Unexpected response: {:?}", response));
+                        return;
+                    }
 
-                tokio::time::sleep(Duration::from_secs(retry_delay)).await;
-                continue;
-            } else if !response.status().is_success() {
-                return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
+                    let response_json = match response.json::<CollectionResponse<T>>().await {
+                        Ok(json) => json,
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("Failed to parse JSON: {}", e));
+                            return;
+                        }
+                    };
+
+                    debug!(
+                        "Received api response: count={count}, next={next:?}, previous={previous:?}, results={results}",
+                        count = response_json.count,
+                        next = response_json.next,
+                        previous = response_json.previous,
+                        results = response_json.results.len(),
+                    );
+
+                    // Yield the current page of results
+                    yield Ok(response_json.results);
+
+                    // Set up for next iteration
+                    if let Some(next) = response_json.next {
+                        match Url::parse(&next) {
+                            Ok(parsed_url) => {
+                                next_url = Some(parsed_url);
+                                break; // Break the retry loop, continue with next page
+                            }
+                            Err(e) => {
+                                yield Err(anyhow::anyhow!("Failed to parse next URL: {}", e));
+                                return;
+                            }
+                        }
+                    } else {
+                        next_url = None;
+                        break; // No more pages
+                    }
+                }
             }
+        };
 
-            let mut response = response.json::<CollectionResponse<T>>().await?;
+        Box::pin(stream)
+    }
 
-            debug!(
-                "Received api response: count={count}, next={next:?}, previous={previous:?}",
-                count = response.count,
-                next = response.next,
-                previous = response.previous,
-            );
-
-            entities.append(&mut response.results);
-
-            if let Some(next) = response.next {
-                next_url = Url::parse(&next).unwrap();
-            } else {
-                break;
+    pub(crate) async fn fetch_paged<T: DeserializeOwned + Send + 'static>(
+        &self,
+        resource: Resource,
+        last_updated: Option<DateTime<Utc>>,
+    ) -> Result<Vec<T>, anyhow::Error> {
+        use futures::stream::StreamExt;
+        
+        let mut all_results = Vec::new();
+        let mut stream = self.fetch_paged_stream(resource, last_updated);
+        
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    all_results.extend(chunk);
+                }
+                Err(e) => return Err(e),
             }
         }
-
-        return Ok(entities);
+        
+        Ok(all_results)
     }
 
     pub async fn fetch_document_list(

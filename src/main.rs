@@ -2,6 +2,7 @@ use crate::library::{Book, Document, Highlight};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};
+use futures::stream::StreamExt;
 use itertools::Itertools;
 use obsidian_rust_interface::joining::strategies::TypeAndKey;
 use obsidian_rust_interface::joining::JoinedNote;
@@ -488,15 +489,41 @@ async fn main() -> Result<(), anyhow::Error> {
             let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
 
             if kinds.contains(&ReadwiseObjectKind::Book) {
-                let books = readwise.fetch_books(last_sync).await?;
-                let book_refs: Vec<&_> = books.iter().collect();
-                db.insert_books(&book_refs).await?;
+                info!("Starting to stream books from Readwise API");
+                let mut book_stream = readwise.fetch_books_stream(last_sync);
+                
+                while let Some(chunk_result) = book_stream.next().await {
+                    match chunk_result {
+                        Ok(books_chunk) => {
+                            if !books_chunk.is_empty() {
+                                info!("Processing {} books in current chunk", books_chunk.len());
+                                let book_refs: Vec<&_> = books_chunk.iter().collect();
+                                db.insert_books(&book_refs).await?;
+                            }
+                        }
+                        Err(e) => return Err(anyhow!("Failed to fetch books chunk: {}", e)),
+                    }
+                }
+                info!("Finished processing all book chunks");
             }
 
             if kinds.contains(&ReadwiseObjectKind::Highlight) {
-                let highlights = readwise.fetch_highlights(last_sync).await?;
-                let highlight_refs: Vec<&_> = highlights.iter().collect();
-                db.insert_highlights(&highlight_refs).await?;
+                info!("Starting to stream highlights from Readwise API");
+                let mut highlight_stream = readwise.fetch_highlights_stream(last_sync);
+                
+                while let Some(chunk_result) = highlight_stream.next().await {
+                    match chunk_result {
+                        Ok(highlights_chunk) => {
+                            if !highlights_chunk.is_empty() {
+                                info!("Processing {} highlights in current chunk", highlights_chunk.len());
+                                let highlight_refs: Vec<&_> = highlights_chunk.iter().collect();
+                                db.insert_highlights(&highlight_refs).await?;
+                            }
+                        }
+                        Err(e) => return Err(anyhow!("Failed to fetch highlights chunk: {}", e)),
+                    }
+                }
+                info!("Finished processing all highlight chunks");
             }
 
             if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {

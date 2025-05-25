@@ -10,8 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "^1"
+async-stream = "0.3"
 chrono = { version = "^0.4", features = ["serde"] }
 clap = { version = "^4.3", features = ["derive", "env"] }
+futures = "0.3"
 itertools = "0.14.0"
 js-sandbox = "0.1.6"
 obsidian-rust-interface = { git = "https://github.com/joshuacoles/Obsidian-Rust-Interface", version = "^0" }
@@ -24,6 +26,7 @@ serde_yml = "0.0.12"
 sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "sqlite", "migrate", "chrono"] }
 tera = "^1.20"
 tokio = { version = "^1.0", features = ["full"] }
+tokio-stream = "0.1"
 tracing = "^0.1"
 tracing-subscriber = "^0.3"
 
