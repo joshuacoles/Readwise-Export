@@ -161,8 +161,6 @@ impl Database {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
-
         // Collect all unique tags first
         let mut all_tags = std::collections::HashMap::new();
         for book in books {
@@ -173,10 +171,11 @@ impl Database {
 
         // Batch insert tags if any exist
         if !all_tags.is_empty() {
-            for tag in all_tags.values() {
-                self.insert_tag(&mut tx, tag).await?;
-            }
+            let tags_to_insert: Vec<&Tag> = all_tags.values().cloned().collect();
+            self.insert_tags(&tags_to_insert).await?;
         }
+
+        let mut tx = self.pool.begin().await?;
 
         // Batch insert books using multiple value tuples
         let mut book_ids = Vec::new();
@@ -286,8 +285,6 @@ impl Database {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await?;
-
         // Collect all unique tags first
         let mut all_tags = std::collections::HashMap::new();
         for highlight in highlights {
@@ -298,10 +295,11 @@ impl Database {
 
         // Batch insert tags if any exist
         if !all_tags.is_empty() {
-            for tag in all_tags.values() {
-                self.insert_tag(&mut tx, tag).await?;
-            }
+            let tags_to_insert: Vec<&Tag> = all_tags.values().cloned().collect();
+            self.insert_tags(&tags_to_insert).await?;
         }
+
+        let mut tx = self.pool.begin().await?;
 
         // Batch insert highlights using multiple value tuples
         let mut highlight_ids = Vec::new();
@@ -532,6 +530,36 @@ impl Database {
         }
         query.execute(&self.pool).await?;
 
+        Ok(())
+    }
+
+    pub async fn insert_tags(&self, tags: &[&crate::readwise::Tag]) -> anyhow::Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        let placeholders: Vec<String> = (0..tags.len())
+            .map(|_| "(?, ?)".to_string())
+            .collect();
+
+        let query_str = format!(
+            "INSERT INTO tags (id, name)
+            VALUES {}
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name",
+            placeholders.join(", ")
+        );
+
+        let mut query = sqlx::query(&query_str);
+        for tag in tags {
+            query = query.bind(tag.id).bind(&tag.name);
+        }
+
+        query.execute(&mut *tx).await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
