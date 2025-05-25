@@ -1,8 +1,7 @@
-use crate::library::{Book, Document, Highlight};
 use crate::Library;
 use crate::readwise::Tag;
 use anyhow::Context;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::{SqlitePool, Row};
 
 mod types {

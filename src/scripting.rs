@@ -1,4 +1,3 @@
-use crate::readwise::{Book, Highlight};
 use rhai::serde::to_dynamic;
 use rhai::{Dynamic, Engine, Scope, AST};
 use serde_json::json;

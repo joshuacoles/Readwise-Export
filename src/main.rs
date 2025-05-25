@@ -1,4 +1,3 @@
-use crate::readwise::{Book as ReadwiseBook, Document as ReadwiseDocument, Highlight as ReadwiseHighlight, Tag};
 use crate::library::{Book, Document, Highlight};
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
@@ -465,7 +464,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     match &cli.command {
         Commands::Fetch(fetch_cmd) => {
-            let readwise = readwise::Readwise::new(&fetch_cmd.api_token);
             let kinds = if fetch_cmd.kind.is_empty() {
                 vec![
                     ReadwiseObjectKind::ReaderDocument,
