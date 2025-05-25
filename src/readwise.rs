@@ -1,10 +1,10 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use futures::stream::Stream;
 use reqwest::header::AUTHORIZATION;
 use reqwest::{StatusCode, Url};
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
-use futures::stream::Stream;
 use std::pin::Pin;
+use std::time::Duration;
 
 pub struct Readwise {
     token: String,
@@ -42,7 +42,11 @@ impl From<Book> for crate::library::Book {
             author: book.author,
             category: book.category,
             num_highlights: book.num_highlights,
-            last_highlight_at: book.last_highlight_at.as_deref().map(|s| s.parse().ok()).flatten(),
+            last_highlight_at: book
+                .last_highlight_at
+                .as_deref()
+                .map(|s| s.parse().ok())
+                .flatten(),
             updated: book.updated.as_deref().map(|s| s.parse().ok()).flatten(),
             cover_image_url: book.cover_image_url,
             highlights_url: book.highlights_url,
@@ -75,7 +79,11 @@ impl From<Highlight> for crate::library::Highlight {
             note: highlight.note,
             location: highlight.location,
             location_type: highlight.location_type,
-            highlighted_at: highlight.highlighted_at.as_deref().map(|s| s.parse().ok()).flatten(),
+            highlighted_at: highlight
+                .highlighted_at
+                .as_deref()
+                .map(|s| s.parse().ok())
+                .flatten(),
             url: highlight.url,
             color: highlight.color,
             updated: highlight.updated.parse().unwrap(),
@@ -119,27 +127,21 @@ impl Readwise {
     pub async fn fetch_library(&self, kinds: &[ReadwiseObjectKind]) -> anyhow::Result<Library> {
         let books = if kinds.contains(&ReadwiseObjectKind::Book) {
             let readwise_books = self.fetch_books(None).await?;
-            readwise_books.into_iter()
-                .map(Into::into)
-                .collect()
+            readwise_books.into_iter().map(Into::into).collect()
         } else {
             vec![]
         };
 
         let highlights = if kinds.contains(&ReadwiseObjectKind::Highlight) {
             let readwise_highlights = self.fetch_highlights(None).await?;
-            readwise_highlights.into_iter()
-                .map(Into::into)
-                .collect()
+            readwise_highlights.into_iter().map(Into::into).collect()
         } else {
             vec![]
         };
 
         let documents = if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
             let readwise_documents = self.fetch_document_list(None, None).await?;
-            readwise_documents.into_iter()
-                .map(Into::into)
-                .collect()
+            readwise_documents.into_iter().map(Into::into).collect()
         } else {
             vec![]
         };
@@ -161,7 +163,8 @@ impl Readwise {
 
         if kinds.contains(&ReadwiseObjectKind::Book) {
             let readwise_books = self.fetch_books(Some(last_updated)).await?;
-            let library_books = readwise_books.into_iter()
+            let library_books = readwise_books
+                .into_iter()
                 .map(Into::into)
                 .collect::<Vec<crate::library::Book>>();
             library.books.extend(library_books);
@@ -169,7 +172,8 @@ impl Readwise {
 
         if kinds.contains(&ReadwiseObjectKind::Highlight) {
             let readwise_highlights = self.fetch_highlights(Some(last_updated)).await?;
-            let library_highlights = readwise_highlights.into_iter()
+            let library_highlights = readwise_highlights
+                .into_iter()
                 .map(Into::into)
                 .collect::<Vec<crate::library::Highlight>>();
             library.highlights.extend(library_highlights);
@@ -177,7 +181,8 @@ impl Readwise {
 
         if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
             let readwise_documents = self.fetch_document_list(Some(last_updated), None).await?;
-            let library_documents = readwise_documents.into_iter()
+            let library_documents = readwise_documents
+                .into_iter()
                 .map(Into::into)
                 .collect::<Vec<crate::library::Document>>();
             library.documents.extend(library_documents);
@@ -331,10 +336,10 @@ impl Readwise {
         last_updated: Option<DateTime<Utc>>,
     ) -> Result<Vec<T>, anyhow::Error> {
         use futures::stream::StreamExt;
-        
+
         let mut all_results = Vec::new();
         let mut stream = self.fetch_paged_stream(resource, last_updated);
-        
+
         while let Some(result) = stream.next().await {
             match result {
                 Ok(chunk) => {
@@ -343,7 +348,7 @@ impl Readwise {
                 Err(e) => return Err(e),
             }
         }
-        
+
         Ok(all_results)
     }
 
@@ -520,7 +525,18 @@ impl PublishedDate {
     pub(crate) fn as_date_time(&self) -> chrono::DateTime<Utc> {
         match self {
             PublishedDate::Integer(i) => Utc.timestamp_millis_opt(*i).unwrap(),
-            PublishedDate::String(s) => s.parse().unwrap(),
+            PublishedDate::String(s) => s
+                .parse()
+                .or_else(|_| {
+                    NaiveDate::parse_from_str(&s, "%Y-%m-%d").map(|d| d.and_hms(0, 0, 0).and_utc())
+                })
+                .unwrap(),
         }
     }
+}
+
+#[test]
+fn test_p_d() {
+    let x = "2023-11-24";
+    dbg!(PublishedDate::String(x.to_string()).as_date_time());
 }
