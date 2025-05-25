@@ -352,92 +352,149 @@ impl Readwise {
         Ok(all_results)
     }
 
-    pub async fn fetch_document_list(
+    pub fn fetch_documents_stream(
         &self,
         updated_after: Option<DateTime<Utc>>,
         location: Option<String>,
-    ) -> Result<Vec<Document>, anyhow::Error> {
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<Document>, anyhow::Error>> + Send + '_>> {
+        let token = self.token.clone();
+
         info!(
-            "Fetching reader documents from Readwise, since {}",
+            "Starting streaming fetch of reader documents from Readwise, since {}",
             updated_after
                 .map(|v| v.to_rfc3339())
                 .unwrap_or("[all]".to_string())
         );
 
-        let base_url = Url::parse("https://readwise.io/api/v3/list").unwrap();
-        let mut full_data = Vec::new();
-        let mut next_page_cursor: Option<String> = None;
+        let stream = async_stream::stream! {
+            let base_url = match Url::parse("https://readwise.io/api/v3/list") {
+                Ok(url) => url,
+                Err(e) => {
+                    yield Err(anyhow::anyhow!("Failed to parse base URL: {}", e));
+                    return;
+                }
+            };
+            
+            let mut next_page_cursor: Option<String> = None;
 
-        loop {
-            let mut url = base_url.clone();
+            loop {
+                let mut url = base_url.clone();
 
-            {
-                let mut query_params = url.query_pairs_mut();
+                {
+                    let mut query_params = url.query_pairs_mut();
 
-                if let Some(cursor) = &next_page_cursor {
-                    query_params.append_pair("pageCursor", cursor);
+                    if let Some(cursor) = &next_page_cursor {
+                        query_params.append_pair("pageCursor", cursor);
+                    }
+
+                    if let Some(updated) = updated_after {
+                        query_params.append_pair("updatedAfter", &updated.to_rfc3339());
+                    }
+
+                    if let Some(loc) = &location {
+                        query_params.append_pair("location", loc);
+                    }
                 }
 
-                if let Some(updated) = updated_after {
-                    query_params.append_pair("updatedAfter", &updated.to_rfc3339());
-                }
+                debug!(
+                    "Making export api request with params: {}",
+                    url.query().unwrap_or("")
+                );
 
-                if let Some(loc) = &location {
-                    query_params.append_pair("location", loc);
+                loop {
+                    let response = match reqwest::Client::new()
+                        .get(url.clone())
+                        .header(AUTHORIZATION, format!("Token {}", token))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("Request failed: {}", e));
+                            return;
+                        }
+                    };
+
+                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                        let retry_delay = response
+                            .headers()
+                            .get("Retry-After")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(5);
+
+                        debug!("Rate limited, retrying in {} seconds", retry_delay);
+                        tokio::time::sleep(Duration::from_secs(retry_delay)).await;
+                        continue;
+                    } else if !response.status().is_success() {
+                        yield Err(anyhow::anyhow!("Unexpected response: {:?}", response));
+                        return;
+                    }
+
+                    let raw = match response.json::<Value>().await {
+                        Ok(json) => json,
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("Failed to parse JSON: {}", e));
+                            return;
+                        }
+                    };
+                    
+                    debug!("Raw result {:?}", raw);
+
+                    let response_json: DocumentListResponse = match serde_json::from_value(raw) {
+                        Ok(response) => response,
+                        Err(e) => {
+                            yield Err(anyhow::anyhow!("Failed to deserialize document list response: {}", e));
+                            return;
+                        }
+                    };
+
+                    debug!(
+                        "Received api response: results={}, next_cursor={:?}",
+                        response_json.results.len(),
+                        response_json.next_page_cursor
+                    );
+
+                    // Yield the current page of results
+                    yield Ok(response_json.results);
+
+                    // Set up for next iteration
+                    next_page_cursor = response_json.next_page_cursor;
+
+                    if next_page_cursor.is_none() {
+                        return; // No more pages
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        break; // Break the retry loop, continue with next page
+                    }
                 }
             }
+        };
 
-            debug!(
-                "Making export api request with params: {}",
-                url.query().unwrap_or("")
-            );
+        Box::pin(stream)
+    }
 
-            let response = reqwest::Client::new()
-                .get(url.clone())
-                .header(AUTHORIZATION, format!("Token {}", self.token))
-                .send()
-                .await?;
-
-            if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                let retry_delay = response
-                    .headers()
-                    .get("Retry-After")
-                    .map(|v| v.to_str().unwrap())
-                    .map(|v| v.parse::<u64>().unwrap())
-                    .unwrap_or(5);
-
-                debug!("Rate limited, retrying in {} seconds", retry_delay);
-
-                tokio::time::sleep(Duration::from_secs(retry_delay)).await;
-                continue;
-            } else if !response.status().is_success() {
-                return Err(anyhow::anyhow!("Unexpected response: {:?}", response));
-            }
-
-            let raw = response.json::<Value>().await?;
-            debug!("Raw result {:?}", raw);
-
-            let response_json: DocumentListResponse = serde_json::from_value(raw)?;
-
-            debug!(
-                "Received api response: results={}, next_cursor={:?}",
-                response_json.results.len(),
-                response_json.next_page_cursor
-            );
-
-            full_data.extend(response_json.results);
-            next_page_cursor = response_json.next_page_cursor;
-
-            if next_page_cursor.is_none() {
-                break;
-            } else {
-                tokio::time::sleep(Duration::from_secs(3)).await;
+    pub async fn fetch_document_list(
+        &self,
+        updated_after: Option<DateTime<Utc>>,
+        location: Option<String>,
+    ) -> Result<Vec<Document>, anyhow::Error> {
+        use futures::stream::StreamExt;
+        
+        let mut all_results = Vec::new();
+        let mut stream = self.fetch_documents_stream(updated_after, location);
+        
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    all_results.extend(chunk);
+                }
+                Err(e) => return Err(e),
             }
         }
-
-        debug!("Fetched {} documents total", full_data.len());
-
-        Ok(full_data)
+        
+        debug!("Fetched {} documents total", all_results.len());
+        Ok(all_results)
     }
 }
 

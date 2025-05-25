@@ -529,15 +529,23 @@ async fn main() -> Result<(), anyhow::Error> {
                         info!("Finished processing all highlight chunks");
                     }
                     ReadwiseObjectKind::ReaderDocument => {
-                        info!("Fetching reader documents from Readwise API");
-                        let documents = readwise.fetch_document_list(last_sync, None).await?;
-                        if !documents.is_empty() {
-                            info!("Processing {} documents", documents.len());
-                            let document_refs: Vec<&_> = documents.iter().collect();
-                            db.insert_documents(&document_refs).await?;
+                        info!("Starting to stream documents from Readwise API");
+                        let mut document_stream = readwise.fetch_documents_stream(last_sync, None);
+                        
+                        while let Some(chunk_result) = document_stream.next().await {
+                            match chunk_result {
+                                Ok(documents_chunk) => {
+                                    if !documents_chunk.is_empty() {
+                                        info!("Processing {} documents in current chunk", documents_chunk.len());
+                                        let document_refs: Vec<&_> = documents_chunk.iter().collect();
+                                        db.insert_documents(&document_refs).await?;
+                                    }
+                                }
+                                Err(e) => return Err(anyhow!("Failed to fetch documents chunk: {}", e)),
+                            }
                         }
                         db.update_sync_state(ReadwiseObjectKind::ReaderDocument, Utc::now()).await?;
-                        info!("Finished processing reader documents");
+                        info!("Finished processing all document chunks");
                     }
                 }
             }
