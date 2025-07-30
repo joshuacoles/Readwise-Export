@@ -1,14 +1,13 @@
 use anyhow::{anyhow, Context as _};
-use chrono::{DateTime, Utc};
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 use obsidian_rust_interface::joining::strategies::TypeAndKey;
 use obsidian_rust_interface::joining::JoinedNote;
 use obsidian_rust_interface::{NoteReference, Vault};
-use readwise_common::{Book, Database, Document, Highlight, Library};
+use readwise_common::{Book, Database, Highlight, Library};
 use regex::Regex;
 use scripting::ScriptType;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tera::{Context, Tera};

@@ -193,14 +193,6 @@ impl Database {
         Ok(Self { pool, db_type })
     }
 
-    fn is_postgres(&self) -> bool {
-        self.db_type == DatabaseType::Postgres
-    }
-
-    fn is_sqlite(&self) -> bool {
-        self.db_type == DatabaseType::Sqlite
-    }
-
     pub async fn insert_book(&self, book: &crate::library::Book) -> anyhow::Result<()> {
         self.insert_books(&[book]).await
     }

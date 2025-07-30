@@ -1,11 +1,11 @@
-use anyhow::{anyhow, Context as _};
-use chrono::{DateTime, Utc};
+use anyhow::anyhow;
+use chrono::Utc;
 use clap::{Parser, ValueEnum};
 use futures::stream::StreamExt;
 use readwise_common::{Database, ReadwiseObjectKind};
 use serde::Deserialize;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 mod readwise;
 

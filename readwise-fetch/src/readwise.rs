@@ -122,94 +122,11 @@ impl Readwise {
         }
     }
 
-    pub async fn fetch_library(&self, kinds: &[ReadwiseObjectKind]) -> anyhow::Result<Library> {
-        let books = if kinds.contains(&ReadwiseObjectKind::Book) {
-            let readwise_books = self.fetch_books(None).await?;
-            readwise_books.into_iter().map(Into::into).collect()
-        } else {
-            vec![]
-        };
-
-        let highlights = if kinds.contains(&ReadwiseObjectKind::Highlight) {
-            let readwise_highlights = self.fetch_highlights(None).await?;
-            readwise_highlights.into_iter().map(Into::into).collect()
-        } else {
-            vec![]
-        };
-
-        let documents = if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
-            let readwise_documents = self.fetch_document_list(None, None).await?;
-            readwise_documents.into_iter().map(Into::into).collect()
-        } else {
-            vec![]
-        };
-
-        Ok(Library {
-            books,
-            highlights,
-            documents,
-            updated_at: Utc::now(),
-        })
-    }
-
-    pub async fn update_library(
-        &self,
-        library: &mut Library,
-        kinds: &[ReadwiseObjectKind],
-    ) -> anyhow::Result<()> {
-        let last_updated = library.updated_at;
-
-        if kinds.contains(&ReadwiseObjectKind::Book) {
-            let readwise_books = self.fetch_books(Some(last_updated)).await?;
-            let library_books = readwise_books
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<readwise_common::Book>>();
-            library.books.extend(library_books);
-        }
-
-        if kinds.contains(&ReadwiseObjectKind::Highlight) {
-            let readwise_highlights = self.fetch_highlights(Some(last_updated)).await?;
-            let library_highlights = readwise_highlights
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<readwise_common::Highlight>>();
-            library.highlights.extend(library_highlights);
-        }
-
-        if kinds.contains(&ReadwiseObjectKind::ReaderDocument) {
-            let readwise_documents = self.fetch_document_list(Some(last_updated), None).await?;
-            let library_documents = readwise_documents
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<readwise_common::Document>>();
-            library.documents.extend(library_documents);
-        }
-
-        library.updated_at = Utc::now();
-
-        Ok(())
-    }
-
-    pub async fn fetch_books(
-        &self,
-        last_updated: Option<DateTime<Utc>>,
-    ) -> Result<Vec<Book>, anyhow::Error> {
-        self.fetch_paged(Resource::Books, last_updated).await
-    }
-
     pub fn fetch_books_stream(
         &self,
         last_updated: Option<DateTime<Utc>>,
     ) -> Pin<Box<dyn Stream<Item = Result<Vec<Book>, anyhow::Error>> + Send + '_>> {
         self.fetch_paged_stream(Resource::Books, last_updated)
-    }
-
-    pub async fn fetch_highlights(
-        &self,
-        last_updated: Option<DateTime<Utc>>,
-    ) -> Result<Vec<Highlight>, anyhow::Error> {
-        self.fetch_paged(Resource::Highlights, last_updated).await
     }
 
     pub fn fetch_highlights_stream(
@@ -326,28 +243,6 @@ impl Readwise {
         };
 
         Box::pin(stream)
-    }
-
-    pub(crate) async fn fetch_paged<T: DeserializeOwned + Send + 'static>(
-        &self,
-        resource: Resource,
-        last_updated: Option<DateTime<Utc>>,
-    ) -> Result<Vec<T>, anyhow::Error> {
-        use futures::stream::StreamExt;
-
-        let mut all_results = Vec::new();
-        let mut stream = self.fetch_paged_stream(resource, last_updated);
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(chunk) => {
-                    all_results.extend(chunk);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(all_results)
     }
 
     pub fn fetch_documents_stream(
@@ -472,28 +367,7 @@ impl Readwise {
         Box::pin(stream)
     }
 
-    pub async fn fetch_document_list(
-        &self,
-        updated_after: Option<DateTime<Utc>>,
-        location: Option<String>,
-    ) -> Result<Vec<Document>, anyhow::Error> {
-        use futures::stream::StreamExt;
-        
-        let mut all_results = Vec::new();
-        let mut stream = self.fetch_documents_stream(updated_after, location);
-        
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(chunk) => {
-                    all_results.extend(chunk);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        
-        debug!("Fetched {} documents total", all_results.len());
-        Ok(all_results)
-    }
+    // fetch_document_list removed - only streaming methods are used now
 }
 
 #[derive(Debug, Deserialize)]
@@ -583,7 +457,7 @@ impl PublishedDate {
             PublishedDate::String(s) => s
                 .parse()
                 .or_else(|_| {
-                    NaiveDate::parse_from_str(&s, "%Y-%m-%d").map(|d| d.and_hms(0, 0, 0).and_utc())
+                    NaiveDate::parse_from_str(&s, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc())
                 })
                 .unwrap(),
         }
