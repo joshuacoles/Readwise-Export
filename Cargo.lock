@@ -1705,33 +1705,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "obsidian-readwise-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "chrono",
- "clap",
- "futures",
- "itertools 0.14.0",
- "js-sandbox",
- "obsidian-rust-interface",
- "regex",
- "reqwest",
- "rhai",
- "serde",
- "serde_json",
- "serde_yml",
- "sqlx",
- "sqlx-cli",
- "tera",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "obsidian-rust-interface"
 version = "0.2.11"
 source = "git+https://github.com/joshuacoles/Obsidian-Rust-Interface#bc29a21b72d9d8a58467fa7abc6cafbf6705f78d"
@@ -2098,6 +2071,61 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
+]
+
+[[package]]
+name = "readwise-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "itertools 0.14.0",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx-cli",
+ "tracing",
+]
+
+[[package]]
+name = "readwise-export"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "itertools 0.14.0",
+ "js-sandbox",
+ "obsidian-rust-interface",
+ "readwise-common",
+ "regex",
+ "rhai",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "tera",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "readwise-fetch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "chrono",
+ "clap",
+ "futures",
+ "readwise-common",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

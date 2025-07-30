@@ -4,7 +4,12 @@
       "Bash(cargo check:*)",
       "Bash(find:*)",
       "Bash(mkdir:*)",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Bash(cp:*)",
+      "Bash(ls:*)",
+      "Bash(jj new:*)",
+      "Bash(jj desc:*)",
+      "Bash(jj commit:*)"
     ],
     "deny": []
   },
