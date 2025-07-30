@@ -13,7 +13,7 @@ pub struct Tag {
 }
 
 // Re-export enum needed by both executables
-#[derive(Debug, Clone, Copy, serde::Deserialize, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Clone, Copy, serde::Deserialize, Eq, PartialEq)]
 pub enum ReadwiseObjectKind {
     Book,
     Highlight,

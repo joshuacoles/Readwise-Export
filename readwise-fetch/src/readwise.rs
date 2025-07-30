@@ -12,7 +12,7 @@ pub struct Readwise {
     api_page_size: i64,
 }
 
-use crate::{Library, ReadwiseObjectKind};
+use readwise_common::{Library, ReadwiseObjectKind, Tag};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,9 +34,9 @@ pub struct Book {
     pub tags: Vec<Tag>,
 }
 
-impl From<Book> for crate::library::Book {
+impl From<Book> for readwise_common::Book {
     fn from(book: Book) -> Self {
-        crate::library::Book {
+        readwise_common::Book {
             id: book.id,
             title: book.title,
             author: book.author,
@@ -52,6 +52,7 @@ impl From<Book> for crate::library::Book {
             highlights_url: book.highlights_url,
             source_url: book.source_url,
             asin: book.asin,
+            tags: book.tags,
         }
     }
 }
@@ -71,9 +72,9 @@ pub struct Highlight {
     pub tags: Vec<Tag>,
 }
 
-impl From<Highlight> for crate::library::Highlight {
+impl From<Highlight> for readwise_common::Highlight {
     fn from(highlight: Highlight) -> Self {
-        crate::library::Highlight {
+        readwise_common::Highlight {
             id: highlight.id,
             text: highlight.text,
             note: highlight.note,
@@ -88,15 +89,12 @@ impl From<Highlight> for crate::library::Highlight {
             color: highlight.color,
             updated: highlight.updated.parse().unwrap(),
             book_id: highlight.book_id,
+            tags: highlight.tags,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Tag {
-    pub id: i64,
-    pub name: String,
-}
+// Tag is now imported from readwise_common
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum Resource {
@@ -166,7 +164,7 @@ impl Readwise {
             let library_books = readwise_books
                 .into_iter()
                 .map(Into::into)
-                .collect::<Vec<crate::library::Book>>();
+                .collect::<Vec<readwise_common::Book>>();
             library.books.extend(library_books);
         }
 
@@ -175,7 +173,7 @@ impl Readwise {
             let library_highlights = readwise_highlights
                 .into_iter()
                 .map(Into::into)
-                .collect::<Vec<crate::library::Highlight>>();
+                .collect::<Vec<readwise_common::Highlight>>();
             library.highlights.extend(library_highlights);
         }
 
@@ -184,7 +182,7 @@ impl Readwise {
             let library_documents = readwise_documents
                 .into_iter()
                 .map(Into::into)
-                .collect::<Vec<crate::library::Document>>();
+                .collect::<Vec<readwise_common::Document>>();
             library.documents.extend(library_documents);
         }
 
@@ -541,9 +539,9 @@ pub struct Document {
     pub last_moved_at: String,
 }
 
-impl From<Document> for crate::library::Document {
+impl From<Document> for readwise_common::Document {
     fn from(document: Document) -> Self {
-        crate::library::Document {
+        readwise_common::Document {
             id: document.id,
             url: document.url,
             title: document.title,
