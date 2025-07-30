@@ -26,9 +26,9 @@ struct Cli {
     #[arg(long)]
     library: Option<PathBuf>,
 
-    /// SQLite database path
-    #[arg(long, env = "DATABASE_PATH", default_value = "./readwise.db")]
-    database_path: String,
+    /// Database URL (sqlite://path/to/db.sqlite or postgresql://user:pass@host/db)
+    #[arg(long, env = "DATABASE_URL", default_value = "./readwise.db")]
+    database_url: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -461,7 +461,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
     debug!("Parsed CLI: {:?}", &cli);
 
-    let db = db::Database::new(&cli.database_path).await?;
+    let db = db::Database::new(&cli.database_url).await?;
 
     match &cli.command {
         Commands::Fetch(fetch_cmd) => {

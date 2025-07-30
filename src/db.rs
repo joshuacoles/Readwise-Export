@@ -2,9 +2,8 @@ use crate::Library;
 use crate::readwise::Tag;
 use crate::ReadwiseObjectKind;
 use anyhow::Context;
-use chrono::{DateTime, Utc};
-use sqlx::{SqlitePool, Row};
-use sqlx::sqlite::{SqliteConnectOptions};
+use chrono::{DateTime, Utc, NaiveDateTime};
+use sqlx::{AnyPool, Row};
 
 mod types {
     use chrono::{DateTime, NaiveDateTime, Utc};
@@ -132,24 +131,74 @@ mod types {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DatabaseType {
+    Sqlite,
+    Postgres,
+}
+
+impl DatabaseType {
+    fn from_url(url: &str) -> anyhow::Result<Self> {
+        if url.starts_with("sqlite:") || url.starts_with("file:") {
+            Ok(DatabaseType::Sqlite)
+        } else if url.starts_with("postgres:") || url.starts_with("postgresql:") {
+            Ok(DatabaseType::Postgres)
+        } else {
+            anyhow::bail!("Unsupported database URL scheme. Use sqlite:// or postgres://")
+        }
+    }
+}
+
 pub struct Database {
-    pool: SqlitePool,
+    pool: AnyPool,
+    db_type: DatabaseType,
 }
 
 impl Database {
-    pub async fn new(database_path: &str) -> anyhow::Result<Self> {
-        let options = SqliteConnectOptions::new()
-            .filename(database_path)
-            .create_if_missing(true);
+    pub async fn new(database_url: &str) -> anyhow::Result<Self> {
+        let db_type = DatabaseType::from_url(database_url)?;
+        
+        let pool = match db_type {
+            DatabaseType::Sqlite => {
+                // For SQLite, ensure we create the database if it doesn't exist
+                if database_url.starts_with("sqlite:") {
+                    AnyPool::connect(database_url).await?
+                } else {
+                    // Handle file path case
+                    let sqlite_url = format!("sqlite:{}", database_url);
+                    AnyPool::connect(&sqlite_url).await?
+                }
+            }
+            DatabaseType::Postgres => {
+                AnyPool::connect(database_url).await?
+            }
+        };
 
-        let pool = SqlitePool::connect_with(options).await?;
+        // Run migrations based on database type
+        match db_type {
+            DatabaseType::Sqlite => {
+                sqlx::migrate!("./migrations/sqlite")
+                    .run(&pool)
+                    .await
+                    .context("Failed to run SQLite migrations")?;
+            }
+            DatabaseType::Postgres => {
+                sqlx::migrate!("./migrations/postgres")
+                    .run(&pool)
+                    .await
+                    .context("Failed to run PostgreSQL migrations")?;
+            }
+        }
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .context("Failed to run migrations")?;
+        Ok(Self { pool, db_type })
+    }
 
-        Ok(Self { pool })
+    fn is_postgres(&self) -> bool {
+        self.db_type == DatabaseType::Postgres
+    }
+
+    fn is_sqlite(&self) -> bool {
+        self.db_type == DatabaseType::Sqlite
     }
 
     pub async fn insert_book(&self, book: &crate::readwise::Book) -> anyhow::Result<()> {
@@ -416,7 +465,7 @@ impl Database {
         let mut document_word_counts = Vec::new();
         let mut document_created_ats = Vec::new();
         let mut document_updated_ats = Vec::new();
-        let mut document_published_dates = Vec::new();
+        let mut document_published_dates: Vec<Option<String>> = Vec::new();
         let mut document_summaries = Vec::new();
         let mut document_image_urls = Vec::new();
         let mut document_contents = Vec::new();
@@ -431,7 +480,7 @@ impl Database {
 
         for document in documents {
             let published_date = match &document.published_date {
-                Some(published_date) => Some(published_date.as_date_time()),
+                Some(published_date) => Some(published_date.as_date_time().to_rfc3339()),
                 None => None,
             };
 
@@ -515,7 +564,7 @@ impl Database {
                 .bind(document_word_counts[i])
                 .bind(document_created_ats[i])
                 .bind(document_updated_ats[i])
-                .bind(document_published_dates[i])
+                .bind(document_published_dates[i].as_deref())
                 .bind(document_summaries[i])
                 .bind(document_image_urls[i])
                 .bind(document_contents[i])
@@ -565,19 +614,19 @@ impl Database {
 
     async fn insert_tag<'a>(
         &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Any>,
         tag: &Tag,
     ) -> anyhow::Result<()> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO tags (id, name)
             VALUES (?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name
-            "#,
-            tag.id,
-            tag.name,
+            "#
         )
+        .bind(tag.id)
+        .bind(&tag.name)
         .execute(&mut **tx)
         .await?;
 
@@ -587,41 +636,41 @@ impl Database {
     pub async fn update_sync_state(&self, kind: ReadwiseObjectKind, updated_at: DateTime<Utc>) -> anyhow::Result<()> {
         match kind {
             ReadwiseObjectKind::Book => {
-                sqlx::query!(
+                sqlx::query(
                     r#"
                     INSERT INTO sync_state (id, last_books_sync)
                     VALUES (1, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         last_books_sync = excluded.last_books_sync
-                    "#,
-                    updated_at,
+                    "#
                 )
+                .bind(updated_at.to_rfc3339())
                 .execute(&self.pool)
                 .await?;
             }
             ReadwiseObjectKind::Highlight => {
-                sqlx::query!(
+                sqlx::query(
                     r#"
                     INSERT INTO sync_state (id, last_highlights_sync)
                     VALUES (1, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         last_highlights_sync = excluded.last_highlights_sync
-                    "#,
-                    updated_at,
+                    "#
                 )
+                .bind(updated_at.to_rfc3339())
                 .execute(&self.pool)
                 .await?;
             }
             ReadwiseObjectKind::ReaderDocument => {
-                sqlx::query!(
+                sqlx::query(
                     r#"
                     INSERT INTO sync_state (id, last_documents_sync)
                     VALUES (1, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         last_documents_sync = excluded.last_documents_sync
-                    "#,
-                    updated_at,
+                    "#
                 )
+                .bind(updated_at.to_rfc3339())
                 .execute(&self.pool)
                 .await?;
             }
@@ -631,21 +680,27 @@ impl Database {
     }
 
     pub async fn get_last_sync(&self, kind: ReadwiseObjectKind) -> anyhow::Result<Option<DateTime<Utc>>> {
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             SELECT last_books_sync, last_highlights_sync, last_documents_sync
             FROM sync_state
             WHERE id = 1
-            "#,
+            "#
         )
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.and_then(|record| match kind {
-            ReadwiseObjectKind::Book => record.last_books_sync.map(|dt| dt.and_utc()),
-            ReadwiseObjectKind::Highlight => record.last_highlights_sync.map(|dt| dt.and_utc()),
-            ReadwiseObjectKind::ReaderDocument => record.last_documents_sync.map(|dt| dt.and_utc()),
-        }))
+        if let Some(row) = row {
+            let timestamp_str: Option<String> = match kind {
+                ReadwiseObjectKind::Book => row.get("last_books_sync"),
+                ReadwiseObjectKind::Highlight => row.get("last_highlights_sync"),
+                ReadwiseObjectKind::ReaderDocument => row.get("last_documents_sync"),
+            };
+            
+            Ok(timestamp_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn export_to_library(&self) -> anyhow::Result<Library> {
@@ -656,14 +711,17 @@ impl Database {
             
         let mut books = Vec::new();
         for row in rows {
+            let last_highlight_at_str: Option<String> = row.get("last_highlight_at");
+            let updated_str: Option<String> = row.get("updated");
+            
             let book = types::Book {
                 id: row.get("id"),
                 title: row.get("title"),
                 author: row.get("author"),
                 category: row.get("category"),
                 num_highlights: row.get("num_highlights"),
-                last_highlight_at: row.get("last_highlight_at"),
-                updated: row.get("updated"),
+                last_highlight_at: last_highlight_at_str.and_then(|s| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f").ok()),
+                updated: updated_str.and_then(|s| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f").ok()),
                 cover_image_url: row.get("cover_image_url"),
                 highlights_url: row.get("highlights_url"),
                 source_url: row.get("source_url"),
@@ -678,16 +736,19 @@ impl Database {
             
         let mut highlights = Vec::new();
         for row in rows {
+            let highlighted_at_str: Option<String> = row.get("highlighted_at");
+            let updated_str: Option<String> = row.get("updated");
+            
             let highlight = types::Highlight {
                 id: row.get("id"),
                 text: row.get("text"),
                 note: row.get("note"),
                 location: row.get("location"),
                 location_type: row.get("location_type"),
-                highlighted_at: row.get("highlighted_at"),
+                highlighted_at: highlighted_at_str.and_then(|s| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f").ok()),
                 url: row.get("url"),
                 color: row.get("color"),
-                updated: row.get("updated"),
+                updated: updated_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
                 book_id: row.get("book_id"),
             };
             highlights.push(highlight.into());
@@ -699,6 +760,8 @@ impl Database {
             
         let mut documents = Vec::new();
         for row in rows {
+            let published_date_str: Option<String> = row.get("published_date");
+            
             let document = types::Document {
                 id: row.get("id"),
                 url: row.get("url"),
@@ -711,7 +774,7 @@ impl Database {
                 word_count: row.get("word_count"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
-                published_date: row.get("published_date"),
+                published_date: published_date_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
                 summary: row.get("summary"),
                 image_url: row.get("image_url"),
                 content: row.get("content"),
