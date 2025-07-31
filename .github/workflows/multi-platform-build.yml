@@ -29,7 +29,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     # Install OpenSSL and pkg-config for Linux builds
     - name: Install OpenSSL (Linux)
@@ -37,6 +37,12 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y pkg-config libssl-dev
+
+    # Install cross-compilation tools for ARM64 on Linux
+    - name: Install cross-compilation tools (Linux ARM64)
+      if: runner.os == 'Linux' && matrix.arch == 'arm64'
+      run: |
+        sudo apt-get install -y gcc-aarch64-linux-gnu
 
     # Install OpenSSL for macOS builds
     - name: Install OpenSSL (macOS)
@@ -46,29 +52,54 @@ jobs:
         echo 'export OPENSSL_DIR=$(brew --prefix openssl@3)' >> $GITHUB_ENV
 
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
-        target: ${{ matrix.target }}
-        override: true
+        targets: ${{ matrix.target }}
 
-    - name: Build
-      uses: actions-rs/cargo@v1
+    - name: Cache cargo registry
+      uses: actions/cache@v4
       with:
-        command: build
-        args: --release --target ${{ matrix.target }}
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+    # Set up cross-compilation environment for Linux ARM64
+    - name: Configure cross-compilation (Linux ARM64)
+      if: runner.os == 'Linux' && matrix.arch == 'arm64'
+      run: |
+        echo 'export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc' >> $GITHUB_ENV
+        echo 'export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> $GITHUB_ENV
+
+    - name: Build readwise-fetch
+      run: cargo build --release --target ${{ matrix.target }} --bin readwise-fetch
+
+    - name: Build readwise-export  
+      run: cargo build --release --target ${{ matrix.target }} --bin readwise-export
 
     # Optional - run tests
     # - name: Run tests
-    #   uses: actions-rs/cargo@v1
-    #   with:
-    #     command: test
-    #     args: --target ${{ matrix.target }}
+    #   run: cargo test --target ${{ matrix.target }}
 
-    # Archive the built binaries
-    - name: Archive production artifacts
-      uses: actions/upload-artifact@v3
+    # Archive the built binaries with better naming
+    - name: Archive readwise-fetch binary
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}-${{ matrix.arch }}-build
-        path: |
-          target/${{ matrix.target }}/release/*
+        name: readwise-fetch-${{ matrix.os }}-${{ matrix.arch }}
+        path: target/${{ matrix.target }}/release/readwise-fetch${{ runner.os == 'Windows' && '.exe' || '' }}
+
+    - name: Archive readwise-export binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: readwise-export-${{ matrix.os }}-${{ matrix.arch }}
+        path: target/${{ matrix.target }}/release/readwise-export${{ runner.os == 'Windows' && '.exe' || '' }}
